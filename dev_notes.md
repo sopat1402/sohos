@@ -1,3 +1,5 @@
+# Init
+
 K so entry.S will fit into gcc. I'm not writing a bootloader. GCC gives me a CPU, I set up a simple environ, long mode
 and then send it to my kmain which is C. I don't need a PhD in x86 assembly and GAS's bs. QEMU to test stuff, naturally.
 on hang it spins, halts and waits for an interrupt.
@@ -12,3 +14,13 @@ there'll be a driver for video and stuff.
 
 80x25 size VGA. So, on \n it goes to the next line by doing cursor += 80 - cursor%80. Cool but standard. 0xB8000 is being
 written to. That's VGA's area.
+
+# Parsing multiboot info
+
+GRUB gives me data. The first 8 bytes are total size and reserved. After that there's tags to tell me things like
+the grub version/bootloader details, the memory map (very important), command line to have command line args
+later, etc. It also gives me the framebuffer it set up so that I can eventually use a frame buffer instead of lifting
+musty old VGA up from its tomb.
+
+The code is parsing the structs sent by GRUB but now, it is just printing it. Later a frame allocation using buddy
+allocation must come into picture.
