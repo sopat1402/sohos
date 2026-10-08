@@ -1,8 +1,8 @@
 CC = gcc
 LD = ld
 
-CFLAGS = -std=gnu11 -ffreestanding -O2 -Wall -Wextra -fno-pie -fno-pic -fno-stack-protector -fno-asynchronous-unwind-tables -mno-red-zone -mgeneral-regs-only -MMD -MP
-ASFLAGS = -ffreestanding -fno-pie -fno-pic -MMD -MP
+CFLAGS = -std=gnu11 -ffreestanding -O2 -Wall -Wextra -Iinclude -fno-pie -fno-pic -fno-stack-protector -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns -mno-red-zone -mgeneral-regs-only -MMD -MP
+ASFLAGS = -ffreestanding -Iinclude -fno-pie -fno-pic -MMD -MP
 LDFLAGS = -n -nostdlib -z max-page-size=0x1000 -z noexecstack -T linker.ld
 
 BUILD = build
@@ -10,7 +10,9 @@ KERNEL = $(BUILD)/kernel
 ISO = $(BUILD)/sohos.iso
 GRUBCFG = iso/boot/grub/grub.cfg
 
-OBJS = $(BUILD)/entry.o $(BUILD)/kernel.o
+SRCS_C = $(wildcard src/*.c)
+SRCS_S = $(wildcard src/*.S)
+OBJS = $(patsubst src/%.c,$(BUILD)/%.o,$(SRCS_C)) $(patsubst src/%.S,$(BUILD)/%.o,$(SRCS_S))
 DEPS = $(OBJS:.o=.d)
 
 .PHONY: all clean run debug
@@ -45,4 +47,3 @@ clean:
 	rm -rf $(BUILD) iso/boot/kernel
 
 -include $(DEPS)
-
