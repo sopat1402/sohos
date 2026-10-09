@@ -51,3 +51,32 @@ Ok so the third pass that needed me to calculate not only which bit is to be wri
 memory) falls into was hard af. I then spent around half an hour because I didn't put flanking spaces around the = in
 my linker.ld where I exposed kernel start and end. I also made bitmap space reject / clamp  to low memory when the
 num bytes is less that 1MiB due to the kernel data.
+
+So, I was going to do buddy allocation. But the issue is, for the initial setup I capped my paging tables to 1 GiB but
+now I have only 1 PDPT and 1 PML4. I don't want to bake the size in either cause that will just need a refactor later.
+One PDPT can point to 512 entries. But, my PD points to the page directly instead of having more in front of the PDPT.
+Hence the 1 GiB cap I have to fix. I'm reserving space when I do .skip 4096. PD have the 0x83 byte set for PS. That's
+one of the main limits. What a mindfuck.
+
+ugh why the fuck do I even have 2 MiB pages :( why not 4 KiB all the way? because I chose the get into 64-bit mode 
+with the minimum amount of bullshit route. This is why simple bootstrapping always (over every project) comes back to
+bite me in the ass and spit in my face after. After some reading I have found that huge pages are a nice optimisation
+but I need to be able to have 4 KiB pages too. Also more page tables. IDK maybe I can change it once I'm in long mode?
+idk. Nah that's stupid. Welp that's how it's done.
+My 1 GiB shitty entry.S doesn't need to be changed. I'll add comfy C code to then just make new page tables using 
+the bootloader data where it tells me how much ram I can use.
+
+With the -4G flag, I printed max_addr and finally also understood why despite having 32 GB it says 31 on my laptop
+and that's because there's a hole made for PCI BARs and such. 5368709120 is the max_addr, which is exactly 5 GiB.
+So there's 1 GiB extra.
+
+Okay I made an alloc_frame function that is just there for the bootstrapping. Allocates 3 free frames since I haven't
+written a buddy allocator yet. Don't need one for just 3. I'm saving the addresses of them to construct an identity
+copy of the boot tree. Also as of now the address mapping is identity but soon it won't be and it'll be a uint64_t.
+So initially for the identity tree (same structure), my pml4 will point to pdpt,pdpt will point to pd, pd to 2MiB pages,
+which means no PT and 0x83 is ORed in there somewhere. I'll have to look up where. Since I'm zeroing everything else, 
+it'll  say not available. So if something goes wrong, it'll triple fault. I'll have to unfortunately write assembly
+again to make cr3 point to my new pml4. The PD needs to have i*0x200000 ORed with 0x83 to say huge 2MiB pages. The
+0x200000 is 2MiB and the i is the address of the word. 512 times. That's because the write is a uint64_t and 512*8
+is 4096. So... I needed help with the inline assembly function to switch the cr3. But it didn't triple fault so yeah
+it worked.

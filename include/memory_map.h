@@ -40,4 +40,10 @@ struct multiboot_mmap_entry bitmap_space(uint64_t num_bytes,uint64_t multiboot_d
 
 void mark_free_memory(uint64_t multiboot_data, uintptr_t kstart, uintptr_t kend, uintptr_t bitmap_start, uintptr_t bitmap_end);
 
+void mark_frame(uint8_t *bitmap_start,uint64_t frame,int value);
+
+uint64_t count_free_frames(uint8_t *bitmap_start,uint8_t *bitmap_end);
+
+uint64_t alloc_frame(uint8_t *bitmap_start, uint8_t *bitmap_end);
+
 #endif

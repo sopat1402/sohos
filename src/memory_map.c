@@ -48,7 +48,6 @@ uint64_t max_available_memory_address(uint64_t multiboot_data) {
     uint8_t *info_start = (uint8_t *)info;
     uint8_t *info_end = info_start + info->total_size;
     uint8_t *tag_ptr = info_start + 8;
-    uint64_t total_available = 0;
     while ((uint64_t)(info_end - tag_ptr) >= 8) {
         struct multiboot_tag *tag =
             (struct multiboot_tag *)tag_ptr;
@@ -60,15 +59,13 @@ uint64_t max_available_memory_address(uint64_t multiboot_data) {
             break;
         if (tag->type == 6 && tag->size >= 16) {
             struct multiboot_mmap_tag *mmap =(struct multiboot_mmap_tag *)tag;
-            if (mmap->entry_size < sizeof(struct multiboot_mmap_entry)) {} 
-            else {
+            if (mmap->entry_size >= sizeof(struct multiboot_mmap_entry)) {
                 uint32_t offset = 16;
                 while (offset <= tag->size && mmap->entry_size <= tag->size - offset) {
                     struct multiboot_mmap_entry *entry =(struct multiboot_mmap_entry *)(tag_ptr + offset);
                     uint64_t end_addr = entry->base_addr + entry->length;
                     switch (entry->type) {
                         case 1: //available
-                            total_available += entry->length;
                             if (end_addr>last_addr){
                                 last_addr=end_addr;
                             }
@@ -244,4 +241,56 @@ void mark_free_memory(uint64_t multiboot_data, uintptr_t kstart, uintptr_t kend,
     reserve_range(bitmap,nframes,kstart,kend);
     reserve_range(bitmap,nframes,bitmap_start,bitmap_end);
     reserve_range(bitmap,nframes,(uint64_t)(uintptr_t)info_start,(uint64_t)(uintptr_t)info_end);
+}
+
+void mark_frame(uint8_t *bitmap_start,uint64_t frame,int value){
+    uint64_t byte=frame / 8;
+    uint8_t bit=frame % 8;
+    uint8_t *byte_addr=(uint8_t *)bitmap_start+byte;
+    uint8_t val=*byte_addr;
+    if (value){
+        val |= (uint8_t)(1u << bit);
+    }else{
+        val &= (uint8_t)~(1u << bit);
+    }
+    *byte_addr=val;
+}
+
+uint64_t alloc_frame(uint8_t *bitmap_start, uint8_t *bitmap_end){
+    uint64_t nframes=(uint64_t)(bitmap_end-bitmap_start)*8;
+    uint64_t limit=(uint64_t)262144/8;
+    if (nframes<262144) limit=nframes/8;
+    uint64_t address=0;
+    for (uint8_t *byte=bitmap_start;byte<bitmap_start+limit;byte++){
+        if (*byte==255){
+            address+=8*FRAME_SIZE;
+            continue;
+        }
+        for (int bit=0;bit<8;bit++){
+            if ((*byte & (1u << bit))==0){
+                *byte|=(uint8_t)(1u<<bit);
+                uint64_t *frame=(uint64_t *)address;
+                for (int i=0;i<512;i++)
+                    frame[i]=0;
+                return address;
+            }
+            address+=FRAME_SIZE;
+        }
+    }
+    return 0;
+}
+
+uint64_t count_free_frames(uint8_t *bitmap_start,uint8_t *bitmap_end){
+    uint64_t count=0;
+    for (uint8_t *byte=bitmap_start;byte<bitmap_end;byte++){
+        if (*byte==0xFF){
+            continue;
+        }
+        for (int bit=0;bit<8;bit++){
+            if ((*byte & (1u<<bit))==0){
+                count++;
+            }
+        }
+    }
+    return count;
 }
