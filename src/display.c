@@ -45,14 +45,32 @@ void print_uint(uint64_t value){
 	print(&buffer[i]);
 }
 
-void print_size(uint64_t value){
-	char *units[]={"B","KB","MB","GB","TB","PB"};
-	int i=0;
-	while (value>=1024 && i<5){
-		value/=1024;
-		i++;
-	}
-	print_uint(value);
-	print(" ");
-	print(units[i]);
+void print_size(uint64_t value) {
+    char *units[] = {"B", "KiB", "MiB", "GiB", "TiB", "PiB"};
+    int i = 0;
+    uint64_t scaled = value;
+
+    while (scaled >= 1024 && i < 5) {
+        scaled /= 1024;
+        i++;
+    }
+
+    uint64_t whole = scaled;
+    uint64_t remainder = value;
+
+    for (int j = 0; j < i; j++)
+        remainder /= 1024;
+
+    // Keep one decimal digit using integer arithmetic.
+    uint64_t divisor = 1;
+    for (int j = 0; j < i; j++)
+        divisor *= 1024;
+
+    uint64_t tenths = (value * 10 / divisor) % 10;
+
+    print_uint(whole);
+    print(".");
+    print_uint(tenths);
+    print(" ");
+    print(units[i]);
 }

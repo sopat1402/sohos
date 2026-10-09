@@ -3,8 +3,6 @@
 
 #include <stdint.h>
 
-static volatile uint8_t *vga = (volatile uint8_t *)0xB8000;
-static uint16_t cursor = 0;
 void putchar(char c);
 
 void print(const char *str);

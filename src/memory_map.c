@@ -39,60 +39,6 @@ static int ranges_overlap(uint64_t a_start, uint64_t a_end, uint64_t b_start, ui
     return a_start<b_end && b_start<a_end;
 }
 
-uint64_t max_available_memory_address(uint64_t multiboot_data) {
-    uint64_t last_addr=0;
-    struct multiboot_info *info =(struct multiboot_info *)(uintptr_t)multiboot_data;
-    if (info->total_size < 16) {
-        return last_addr;
-    }
-    uint8_t *info_start = (uint8_t *)info;
-    uint8_t *info_end = info_start + info->total_size;
-    uint8_t *tag_ptr = info_start + 8;
-    while ((uint64_t)(info_end - tag_ptr) >= 8) {
-        struct multiboot_tag *tag =
-            (struct multiboot_tag *)tag_ptr;
-        if (tag->size < 8 ||
-            (uint64_t)(info_end - tag_ptr) < tag->size) {
-            break;
-        }
-        if (tag->type == 0)
-            break;
-        if (tag->type == 6 && tag->size >= 16) {
-            struct multiboot_mmap_tag *mmap =(struct multiboot_mmap_tag *)tag;
-            if (mmap->entry_size >= sizeof(struct multiboot_mmap_entry)) {
-                uint32_t offset = 16;
-                while (offset <= tag->size && mmap->entry_size <= tag->size - offset) {
-                    struct multiboot_mmap_entry *entry =(struct multiboot_mmap_entry *)(tag_ptr + offset);
-                    uint64_t end_addr = entry->base_addr + entry->length;
-                    switch (entry->type) {
-                        case 1: //available
-                            if (end_addr>last_addr){
-                                last_addr=end_addr;
-                            }
-                            break;
-                        case 2: //reserved
-                            break;
-                        case 3: //acpi reclaimable
-                            break;
-                        case 4: //acpi nvs
-                            break;
-                        case 5: //bad ram
-                            break;
-                        default: //unknown
-                            break;
-                    }
-                    offset += mmap->entry_size;
-                }
-            }
-        }
-        uint64_t aligned_size = ((uint64_t)tag->size + 7u) & ~7ull;
-        if (aligned_size > (uint64_t)(info_end - tag_ptr))
-            break;
-        tag_ptr += aligned_size;
-    }
-    return last_addr;
-}
-
 struct multiboot_mmap_entry bitmap_space(uint64_t num_bytes,uint64_t multiboot_data,uintptr_t kstart,uintptr_t kend){
     struct multiboot_mmap_entry bitmap={0,0,0,0};
     num_bytes=align_up(num_bytes,FRAME_SIZE);
@@ -256,7 +202,7 @@ void mark_frame(uint8_t *bitmap_start,uint64_t frame,int value){
     *byte_addr=val;
 }
 
-uint64_t alloc_frame(uint8_t *bitmap_start, uint8_t *bitmap_end){
+uint64_t alloc_frame_basic(uint8_t *bitmap_start, uint8_t *bitmap_end){
     uint64_t nframes=(uint64_t)(bitmap_end-bitmap_start)*8;
     uint64_t limit=(uint64_t)262144/8;
     if (nframes<262144) limit=nframes/8;
@@ -293,4 +239,89 @@ uint64_t count_free_frames(uint8_t *bitmap_start,uint8_t *bitmap_end){
         }
     }
     return count;
+}
+
+void memory_map_stats(uint64_t multiboot_data, uint64_t *total_usable_bytes, uint64_t *highest_usable_end) {
+    if (total_usable_bytes != 0)
+        *total_usable_bytes = 0;
+    if (highest_usable_end != 0)
+        *highest_usable_end = 0;
+    if (multiboot_data == 0 || total_usable_bytes == 0 || highest_usable_end == 0)
+        return;
+
+    struct multiboot_info *info = (struct multiboot_info *)(uintptr_t)multiboot_data;
+    if (info->total_size < 16)
+        return;
+
+    uint8_t *info_start = (uint8_t *)info;
+    uint8_t *info_end = info_start + info->total_size;
+    uint8_t *tag_ptr = info_start + 8;
+
+    while ((uint64_t)(info_end - tag_ptr) >= 8) {
+        struct multiboot_tag *tag = (struct multiboot_tag *)tag_ptr;
+
+        if (tag->size < 8 || (uint64_t)(info_end - tag_ptr) < tag->size)
+            break;
+        if (tag->type == 0)
+            break;
+
+        if (tag->type == 6 && tag->size >= 16) {
+            struct multiboot_mmap_tag *mmap = (struct multiboot_mmap_tag *)tag;
+
+            if (mmap->entry_size >= sizeof(struct multiboot_mmap_entry)) {
+                uint32_t offset = 16;
+
+                while (offset <= tag->size && mmap->entry_size <= tag->size - offset) {
+                    struct multiboot_mmap_entry *entry = (struct multiboot_mmap_entry *)(tag_ptr + offset);
+
+                    if (entry->type == 1 && entry->length <= ~0ull - entry->base_addr) {
+                        uint64_t end = entry->base_addr + entry->length;
+
+                        if (entry->length > ~0ull - *total_usable_bytes)
+                            *total_usable_bytes = ~0ull;
+                        else
+                            *total_usable_bytes += entry->length;
+
+                        if (end > *highest_usable_end)
+                            *highest_usable_end = end;
+                    }
+
+                    offset += mmap->entry_size;
+                }
+            }
+        }
+
+        uint64_t aligned_size = ((uint64_t)tag->size + 7u) & ~7ull;
+        if (aligned_size > (uint64_t)(info_end - tag_ptr))
+            break;
+        tag_ptr += aligned_size;
+    }
+}
+
+uint64_t alloc_frame_in_range(uint8_t *bitmap_start, uint8_t *bitmap_end, uint64_t first_frame, uint64_t end_frame) {
+    if (bitmap_start == 0 || bitmap_end <= bitmap_start || end_frame <= first_frame)
+        return 0;
+
+    uint64_t bitmap_bits = (uint64_t)(bitmap_end - bitmap_start) * 8;
+    if (end_frame > bitmap_bits)
+        end_frame = bitmap_bits;
+
+    for (uint64_t frame = first_frame; frame < end_frame; frame++) {
+        uint8_t mask = (uint8_t)(1u << (frame % 8));
+        uint8_t *byte = &bitmap_start[frame / 8];
+
+        if ((*byte & mask) == 0) {
+            *byte |= mask;
+
+            uint64_t address = frame * FRAME_SIZE;
+            uint64_t *words = (uint64_t *)(uintptr_t)address;
+
+            for (uint64_t i = 0; i < FRAME_SIZE / sizeof(uint64_t); i++)
+                words[i] = 0;
+
+            return address;
+        }
+    }
+
+    return 0;
 }

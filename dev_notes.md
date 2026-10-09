@@ -4,9 +4,13 @@ This is to show the thought process and is essentially a lab notebook I fill stu
 
 # Entry and initial stuff
 
+## Entry into long mode
+
 K so entry.S will fit into gcc. I'm not writing a bootloader. GCC gives me a CPU, I set up a simple environ, long mode
 and then send it to my kmain which is C. I don't need a PhD in x86 assembly and GAS's bs. QEMU to test stuff, naturally.
 on hang it spins, halts and waits for an interrupt.
+
+## VGA display
 
 So in kernel.c, I don't have a printf yet. This itself is a big change. Code is usually linked to libc. So I need
 to first make a putchar. But, it turns out we don't even gaf there about the stack pointer. there's a vga text buffer
@@ -32,6 +36,8 @@ allocation must come into picture.
 
 # Frame allocation
 
+## Making a bitmap
+
 I have to make a bitmap but this is pre malloc (heap) and pre filesystem. How? I have some tough af bootstrapping thing
 and I'll have to lookup how to do it but basically once I have a bitmap, I have each page as 4 KiB and then I go through
 available memory and make the bitmap accordingly and reserved must be marked reserved and then even the available 
@@ -51,6 +57,8 @@ Ok so the third pass that needed me to calculate not only which bit is to be wri
 memory) falls into was hard af. I then spent around half an hour because I didn't put flanking spaces around the = in
 my linker.ld where I exposed kernel start and end. I also made bitmap space reject / clamp  to low memory when the
 num bytes is less that 1MiB due to the kernel data.
+
+## New PML4 tree
 
 So, I was going to do buddy allocation. But the issue is, for the initial setup I capped my paging tables to 1 GiB but
 now I have only 1 PDPT and 1 PML4. I don't want to bake the size in either cause that will just need a refactor later.
@@ -80,3 +88,21 @@ again to make cr3 point to my new pml4. The PD needs to have i*0x200000 ORed wit
 0x200000 is 2MiB and the i is the address of the word. 512 times. That's because the write is a uint64_t and 512*8
 is 4096. So... I needed help with the inline assembly function to switch the cr3. But it didn't triple fault so yeah
 it worked.
+
+I now am adding a page table. pt[0] will be 0 for null pointer to fault. I am mapping kstart and kend into my page
+table by calculating the page range and its physical address. Then, pt[page]=(page*4096)|0x3. The 0x3 says present and
+writable but once it is working I'll change it to read only. I'm calculating the wrong page table index for my kernel.
+I'm currently calculating just address/4096, which is physical frame. Wrong because I need a page table index. My
+linker starts the kernel at 1 MiB or 0x100000.frame_number = pd_index * 512 + pt_index. 
+K so now pd[0] has 4 KiB. It isn't a dynamic change yet. I guess for now I'm blowing the whole huge page thing out of 
+proportion. 
+
+I'm able to discover RAM now and total usable ram using memory_stats. I just need to actually address it. I'm having a 
+pretty rough time with all of this. It isn't even with a malloc so everything I have learned so far doesn't apply. I
+think once I have proper allocation and kmalloc I'll have a much easier time. 
+I read some kernel code to figure out just how I'm supposed to use the available memory. Glad I did because there's a lot
+of alien stuff. That musty little print_size was using GB but calculating GiB. Made me crash out for a while because I
+was searching for the bug in my kernel. Anyways, it now also prints the decimal. 
+
+Ok so my number of frames also increased. I'm testing my editing the make with different -m flags. OK so the values do
+in fact scale with changing -m flags in the qemu command.

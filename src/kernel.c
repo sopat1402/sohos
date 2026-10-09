@@ -1,73 +1,113 @@
 #include <stdint.h>
 #include "../include/memory_map.h"
 #include "../include/display.h"
+#include "../include/paging.h"
 
-uint64_t frame_size = 4096;
+#define PAGE_SIZE 4096ull
+#define BOOTSTRAP_LIMIT 0x40000000ull
 
 extern char kernel_start;
 extern char kernel_end;
 
-static inline void write_cr3(uint64_t pml4_phys) {
-    __asm__ volatile ("mov %0, %%cr3" :: "r"(pml4_phys) : "memory");
-}
-
-void kmain(uint32_t magic, uint64_t multiboot_data){
-    if (magic!=0x36d76289){
+void kmain(uint32_t magic, uint64_t multiboot_data) {
+    if (magic != 0x36d76289) {
+        print("Invalid Multiboot magic\n");
         return;
     }
-    //bitmap construction
-    uint64_t max_addr=max_available_memory_address(multiboot_data);
-    uint64_t max_frames=max_addr/(uint64_t)frame_size;
-    uint64_t num_bytes=((max_frames+7)/8);
-    uintptr_t kstart=(uintptr_t)&kernel_start;
-    uintptr_t kend=(uintptr_t)&kernel_end;
-    struct multiboot_mmap_entry bitmap_region=bitmap_space(num_bytes,multiboot_data,kstart,kend);
-    for (uint64_t i=bitmap_region.base_addr;i<bitmap_region.base_addr+bitmap_region.length;i++){
-        uint8_t *base_addr=(uint8_t *)i;
-        *base_addr=0xFF;
+
+    if (multiboot_data == 0 || multiboot_data >= BOOTSTRAP_LIMIT || BOOTSTRAP_LIMIT - multiboot_data < sizeof(uint32_t)) {
+        print("Multiboot info is outside the bootstrap map\n");
+        return;
     }
-    mark_free_memory(
-        multiboot_data,
-        kstart,
-        kend,
-        (uintptr_t)bitmap_region.base_addr,
-        (uintptr_t)(bitmap_region.base_addr+bitmap_region.length)
-    );
-    uint8_t *bitmap_start=(uint8_t *)bitmap_region.base_addr;
-    uint8_t *bitmap_end=bitmap_region.length+bitmap_start;
-    print("Kernel start : ");
-    print_uint(kstart);
-    print("\n");
-    print("Kernel end : ");
-    print_uint(kend);
-    print("\n");
-    print("Bitmap region start : ");
-    print_uint((uint64_t) bitmap_start);
-    print("\n");
-    print("Bitmap region end : ");
-    print_uint((uint64_t)bitmap_end);
+
+    uint32_t multiboot_info_size = *(const uint32_t *)(uintptr_t)multiboot_data;
+    if (multiboot_info_size < 16 || multiboot_info_size > BOOTSTRAP_LIMIT - multiboot_data) {
+        print("Invalid Multiboot info size\n");
+        return;
+    }
+
+    uint64_t kstart = (uint64_t)(uintptr_t)&kernel_start;
+    uint64_t kend = (uint64_t)(uintptr_t)&kernel_end;
+
+    if (kstart >= kend || kend > BOOTSTRAP_LIMIT) {
+        print("Kernel is outside the bootstrap map\n");
+        return;
+    }
+
+    uint64_t total_usable_bytes = 0;
+    uint64_t highest_usable_end = 0;
+    memory_map_stats(multiboot_data, &total_usable_bytes, &highest_usable_end);
+
+    if (total_usable_bytes == 0 || highest_usable_end == 0) {
+        print("No available memory reported\n");
+        return;
+    }
+
+    print("Total usable RAM: ");
+    print_size(total_usable_bytes);
+    print(" (");
+    print_uint(total_usable_bytes);
+    print(" bytes)\nHighest usable physical address: 0x");
+    print_hex(highest_usable_end);
     print("\n");
 
-    //new tree
-    print("Total free frames : ");
-    uint64_t free_frames=count_free_frames(bitmap_start,bitmap_end);
-    print_uint(free_frames);
-    print("\n");
-    uint64_t *pml4=(uint64_t *)alloc_frame(bitmap_start,bitmap_end);
-    uint64_t *pdpt=(uint64_t *)alloc_frame(bitmap_start,bitmap_end);
-    uint64_t *pd=(uint64_t *)alloc_frame(bitmap_start,bitmap_end);
-    pml4[0]=(uint64_t)pdpt | 0x3;
-    pdpt[0]=(uint64_t)pd | 0x3;
-    for (int i=0;i<512;i++){
-        uint64_t base_addr=(uint64_t)i*0x200000;
-        uint64_t entry_val=base_addr | 0x83;
-        pd[i]=entry_val;
+    uint64_t max_frames = highest_usable_end / PAGE_SIZE;
+    if (highest_usable_end % PAGE_SIZE != 0)
+        max_frames++;
+
+    uint64_t bitmap_bytes = max_frames / 8;
+    if (max_frames % 8 != 0)
+        bitmap_bytes++;
+
+    if (bitmap_bytes == 0) {
+        print("Bitmap size is zero\n");
+        return;
     }
-    write_cr3((uint64_t)pml4);
-    //test if triple fault or not
-    print("Total free frames : ");
-    free_frames=count_free_frames(bitmap_start,bitmap_end);
-    print_uint(free_frames);
+
+    struct multiboot_mmap_entry bitmap_region = bitmap_space(bitmap_bytes, multiboot_data, (uintptr_t)kstart, (uintptr_t)kend);
+
+    if (bitmap_region.length == 0 || bitmap_region.base_addr == 0 || bitmap_region.base_addr >= BOOTSTRAP_LIMIT || bitmap_region.length > BOOTSTRAP_LIMIT - bitmap_region.base_addr || bitmap_region.base_addr % PAGE_SIZE != 0 || bitmap_region.length % PAGE_SIZE != 0) {
+        print("Bitmap is outside the bootstrap map or invalid\n");
+        return;
+    }
+
+    uint64_t bitmap_end_address = bitmap_region.base_addr + bitmap_region.length;
+    uint8_t *bitmap_start = (uint8_t *)(uintptr_t)bitmap_region.base_addr;
+    uint8_t *bitmap_end = (uint8_t *)(uintptr_t)bitmap_end_address;
+
+    for (uint64_t address = bitmap_region.base_addr; address < bitmap_end_address; address++)
+        *(uint8_t *)(uintptr_t)address = 0xFF;
+
+    mark_free_memory(multiboot_data, (uintptr_t)kstart, (uintptr_t)kend, (uintptr_t)bitmap_region.base_addr, (uintptr_t)bitmap_end_address);
+
+    print("Kernel start: ");
+    print_hex(kstart);
+    print("\nKernel end: ");
+    print_hex(kend);
+    print("\nBitmap start: ");
+    print_hex(bitmap_region.base_addr);
+    print("\nBitmap end: ");
+    print_hex(bitmap_end_address);
+    print("\nFree frames before page tables: ");
+    print_uint(count_free_frames(bitmap_start, bitmap_end));
     print("\n");
 
+    if (!new_tree(bitmap_start, bitmap_end, highest_usable_end))
+        return;
+
+    uint64_t first_high_frame = BOOTSTRAP_LIMIT / PAGE_SIZE;
+    uint64_t high_frame = alloc_frame_in_range(bitmap_start, bitmap_end, first_high_frame, max_frames);
+
+    if (high_frame == 0) {
+        print("No free frame above the bootstrap range\n");
+    } else {
+        print("Allocated and zeroed high frame at: 0x");
+        print_hex(high_frame);
+        print("\n");
+    }
+
+    print("CR3 switched to mixed 4 KiB / 2 MiB identity map\n");
+    print("Free frames after CR3 switch: ");
+    print_uint(count_free_frames(bitmap_start, bitmap_end));
+    print("\n");
 }
