@@ -147,3 +147,35 @@ existing entries. Flags are present and writable only. NX and per-section permis
 
 I tested a leak too. It does give a page fault with exception 14 at the end so that means it reached there and can
 process leaks with the new addresses.
+
+## Kernel to higher half
+
+😭 that little shit is still using an identity bridge. This memory allocation bit is a total boss fight. It'll be so
+much smoother once I have a kmalloc and SLUB and whatnot. I partly stole code and partly wrote a little bit of assembly
+(I've been studying). The bootstrap still starts low and it then deletes the old page tables and the kernel physical
+address may be low but the virtual address is high.
+
+So changes to entry.S and linker.ld. linker.ld tells the linker where to assemble each kernel section. low memory
+bootstrap is .boot.text - _start, .boot.bss (bootstrap page tables and stack), .boot.rodata (GDT). It starts around
+1 MiB.
+
+The high virtual memory VMA starts at 0xFFFFFFFF80000000 and has .text-kmain, .rodata, .bss, .data
+
+switch happened here:
+
+movabs rax, OFFSET FLAT:higher_half_entry
+jmp rax
+
+0xFFFFFFFF80000000 → physical 0x200000
+That's the mapping for the start of the kernel image. The page-table entries use 2 MiB pages, so each entry 
+maps a 2 MiB physical region to a corresponding virtual region
+
+Then, comes the magical stack pointer shift:
+movabs rax, OFFSET FLAT:kernel_stack_top
+mov rsp, rax
+and rsp, -16
+
+this shifts the stack from a low bootstrap stack to the high kernel one. 
+
+Essentially, I created a new virtual address that points to the same physical address, made the mapping work and then
+jumped to the new virtual address. The kmain RIP was 0xFFFFFFFF80000626, which is in the high virtual memory zone.

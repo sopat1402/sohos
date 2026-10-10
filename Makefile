@@ -1,23 +1,72 @@
 CC = gcc
 LD = ld
+QEMU = qemu-system-x86_64
 
-CFLAGS = -std=gnu11 -ffreestanding -O2 -Wall -Wextra -Iinclude -fno-pie -fno-pic -fno-stack-protector -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns -mno-red-zone -mgeneral-regs-only -MMD -MP
-ASFLAGS = -ffreestanding -Iinclude -fno-pie -fno-pic -MMD -MP
-LDFLAGS = -n -nostdlib -z max-page-size=0x1000 -z noexecstack -T linker.ld
-
-BUILD = build
-KERNEL = $(BUILD)/kernel
-ISO = $(BUILD)/sohos.iso
+BUILD_DIR = build
+KERNEL = $(BUILD_DIR)/kernel.elf
+ISO = $(BUILD_DIR)/sohos.iso
 GRUBCFG = iso/boot/grub/grub.cfg
 
-SRCS_C = $(wildcard src/*.c)
-SRCS_S = $(wildcard src/*.S)
-OBJS = $(patsubst src/%.c,$(BUILD)/%.o,$(SRCS_C)) $(patsubst src/%.S,$(BUILD)/%.o,$(SRCS_S))
-DEPS = $(OBJS:.o=.d)
+CFLAGS = \
+	-std=gnu11 \
+	-ffreestanding \
+	-O2 \
+	-Wall -Wextra \
+	-Iinclude \
+	-fno-pie -fno-pic \
+	-fno-stack-protector \
+	-fno-asynchronous-unwind-tables \
+	-fno-unwind-tables \
+	-fno-tree-loop-distribute-patterns \
+	-m64 -mcmodel=kernel \
+	-mno-red-zone \
+	-mgeneral-regs-only \
+	-MMD -MP
 
-.PHONY: all clean run debug
+ASFLAGS = \
+	-ffreestanding \
+	-Iinclude \
+	-fno-pie -fno-pic \
+	-m64 \
+	-MMD -MP
 
-all: $(ISO)
+LDFLAGS = \
+	-m elf_x86_64 \
+	-nostdlib \
+	-z max-page-size=0x1000 \
+	-z noexecstack \
+	--build-id=none \
+	-T linker.ld
+
+C_SOURCES = $(wildcard src/*.c)
+ASM_SOURCES = $(wildcard src/*.S)
+
+OBJECTS = \
+	$(patsubst src/%.c,$(BUILD_DIR)/%.o,$(C_SOURCES)) \
+	$(patsubst src/%.S,$(BUILD_DIR)/%.o,$(ASM_SOURCES))
+
+DEPFILES = $(OBJECTS:.o=.d)
+
+.PHONY: all kernel iso run debug clean
+
+# Keep the existing default behavior: build the bootable ISO.
+all: iso
+
+kernel: $(KERNEL)
+
+iso: $(ISO)
+
+$(KERNEL): $(OBJECTS) linker.ld | $(BUILD_DIR)
+	$(LD) $(LDFLAGS) -o $@ $(OBJECTS)
+
+$(BUILD_DIR)/%.o: src/%.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/%.o: src/%.S | $(BUILD_DIR)
+	$(CC) $(ASFLAGS) -c $< -o $@
+
+$(BUILD_DIR):
+	mkdir -p $@
 
 $(ISO): $(KERNEL) $(GRUBCFG)
 	grub-file --is-x86-multiboot2 $(KERNEL)
@@ -25,25 +74,16 @@ $(ISO): $(KERNEL) $(GRUBCFG)
 	cp $(KERNEL) iso/boot/kernel
 	grub-mkrescue -o $@ iso/
 
-$(KERNEL): $(OBJS) linker.ld
-	$(LD) $(LDFLAGS) -o $@ $(OBJS)
-
-$(BUILD)/%.o: src/%.c | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(BUILD)/%.o: src/%.S | $(BUILD)
-	$(CC) $(ASFLAGS) -c $< -o $@
-
-$(BUILD):
-	mkdir -p $(BUILD)
-
 run: $(ISO)
-	qemu-system-x86_64 -m 4G -cdrom $(ISO) -no-reboot -no-shutdown
+	$(QEMU) -m 4G -cdrom $(ISO) -no-reboot -no-shutdown
 
 debug: $(ISO)
-	qemu-system-x86_64 -cdrom $(ISO) -no-reboot -d int,cpu_reset -D $(BUILD)/qemu.log
+	$(QEMU) -cdrom $(ISO) -no-reboot \
+		-d int,cpu_reset \
+		-D $(BUILD_DIR)/qemu.log
 
 clean:
-	rm -rf $(BUILD) iso/boot/kernel
+	rm -rf $(BUILD_DIR)
+	rm -f iso/boot/kernel
 
--include $(DEPS)
+-include $(DEPFILES)

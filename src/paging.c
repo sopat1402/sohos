@@ -79,40 +79,42 @@ static int map_range(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t size
     return 1;
 }
 
-int new_tree(uint64_t kstart, uint64_t kend){
-    if (memory_region_count() == 0 || memory_regions_highest_end() > CANONICAL_LIMIT){
+int new_tree(uint64_t kernel_phys_start, uint64_t kernel_phys_end,uint64_t kernel_virt_start, uint64_t kernel_virt_end) {
+    uint64_t kernel_phys_size = kernel_phys_end - kernel_phys_start;
+    uint64_t kernel_virt_size = kernel_virt_end - kernel_virt_start;
+    if (memory_region_count() == 0 || memory_regions_highest_end() >= CANONICAL_LIMIT ||
+        kernel_phys_end <= kernel_phys_start ||
+        kernel_virt_end <= kernel_virt_start ||
+        kernel_phys_size != kernel_virt_size ||
+        kernel_virt_start < HHDM_BASE ||
+        (kernel_phys_start & (PAGE_SIZE - 1)) != 0 ||
+        (kernel_virt_start & (PAGE_SIZE - 1)) != 0) {
         print("Invalid page-table range\n");
         return 0;
     }
-
     uint64_t pml4_phys = alloc_frame_basic();
-    if (pml4_phys == 0){
+    if (pml4_phys == 0) {
         print("Could not allocate PML4\n");
         return 0;
     }
     uint64_t *pml4 = (uint64_t *)phys_to_virt(pml4_phys);
-
-    uint64_t k_start = kstart & ~(PAGE_SIZE - 1);
-    uint64_t k_end = (kend + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-
-    if (!map_range(pml4, k_start, k_start, k_end - k_start, RAM_FLAGS) || !map_4k(pml4, VGA_ADDRESS, VGA_ADDRESS, MMIO_FLAGS)){
-        print("Could not build the identity bridge\n");
+    if (!map_range(pml4, kernel_virt_start, kernel_phys_start,
+                   kernel_virt_size, RAM_FLAGS)) {
+        print("Could not map the higher-half kernel\n");
         return 0;
     }
-
-    for (uint32_t r = 0; r < memory_region_count(); r++){
+    for (uint32_t r = 0; r < memory_region_count(); r++) {
         const struct mem_region *region = memory_region_get(r);
-        if (!map_range(pml4, HHDM_BASE + region->base, region->base, region->end - region->base, RAM_FLAGS)){
+        if (!map_range(pml4, HHDM_BASE + region->base, region->base,region->end - region->base, RAM_FLAGS)) {
             print("Could not build the direct map\n");
             return 0;
         }
     }
-
-    if (!map_4k(pml4, HHDM_BASE + VGA_ADDRESS, VGA_ADDRESS, MMIO_FLAGS)){
+    if (!map_4k(pml4, HHDM_BASE + VGA_ADDRESS,
+                VGA_ADDRESS, MMIO_FLAGS)) {
         print("Could not map VGA in the direct map\n");
         return 0;
     }
-
     write_cr3(pml4_phys);
     phys_set_hhdm_offset(HHDM_BASE);
     return 1;

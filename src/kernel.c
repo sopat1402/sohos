@@ -9,10 +9,20 @@
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x40000000ull
 
-extern char kernel_start;
-extern char kernel_end;
+extern char __image_phys_start;
+extern char __kernel_phys_start;
+extern char __kernel_phys_end;
+extern char __kernel_virt_start;
+extern char __kernel_virt_end;
 
 void kmain(uint32_t magic, uint64_t multiboot_data) {
+    uintptr_t rip;
+    __asm__ volatile ("lea 0(%%rip), %0" : "=r"(rip));
+
+    print("kmain RIP=0x");
+    print_hex(rip);
+    print("\n");
+
     idt_init();
 
     if (magic != 0x36d76289) {
@@ -31,10 +41,24 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         return;
     }
 
-    uint64_t kstart = kernel_virt_to_phys(&kernel_start);
-    uint64_t kend = kernel_virt_to_phys(&kernel_end);
+    uint64_t image_phys_start = (uint64_t)(uintptr_t)&__image_phys_start;
+    uint64_t image_phys_end   = (uint64_t)(uintptr_t)&__kernel_phys_end;
 
-    if (kstart >= kend || kend > BOOTSTRAP_LIMIT) {
+    uint64_t kernel_phys_start = (uint64_t)(uintptr_t)&__kernel_phys_start;
+    uint64_t kernel_phys_end   = (uint64_t)(uintptr_t)&__kernel_phys_end;
+    uint64_t kernel_virt_start = (uint64_t)(uintptr_t)&__kernel_virt_start;
+    uint64_t kernel_virt_end   = (uint64_t)(uintptr_t)&__kernel_virt_end;
+
+if (image_phys_start >= image_phys_end ||
+    image_phys_end > BOOTSTRAP_LIMIT ||
+    kernel_phys_end <= kernel_phys_start ||
+    kernel_virt_end <= kernel_virt_start ||
+    kernel_phys_end - kernel_phys_start !=
+        kernel_virt_end - kernel_virt_start) {
+    print("Invalid kernel load or virtual range\n");
+    return;
+}
+    if (kernel_phys_start >= kernel_phys_end || kernel_phys_end > BOOTSTRAP_LIMIT) {
         print("Kernel is outside the bootstrap map\n");
         return;
     }
@@ -71,7 +95,7 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
     uint64_t info_start = multiboot_data;
     uint64_t info_end = multiboot_data + multiboot_info_size;
 
-    struct mem_region bitmap_region = bitmap_space(bitmap_bytes, kstart, kend, info_start, info_end);
+    struct mem_region bitmap_region = bitmap_space(bitmap_bytes, image_phys_start, image_phys_end, info_start, info_end);
 
     if (bitmap_region.end <= bitmap_region.base || bitmap_region.end > BOOTSTRAP_LIMIT) {
         print("Bitmap is outside the bootstrap map or invalid\n");
@@ -79,14 +103,13 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
     }
 
     bitmap_init(bitmap_region.base, bitmap_region.end - bitmap_region.base);
-    mark_free_memory(kstart, kend, info_start, info_end);
+    mark_free_memory(image_phys_start, image_phys_end, info_start, info_end);
     print("Free frames before page tables: ");
     print_uint(count_free_frames());
     print("\n");
 
-    if (!new_tree(kstart, kend))
+    if (!new_tree(kernel_phys_start, kernel_phys_end,kernel_virt_start, kernel_virt_end))
         return;
-
     print("Direct map live at 0x");
     print_hex(hhdm_offset);
     print("\n");
