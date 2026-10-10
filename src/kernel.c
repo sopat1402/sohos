@@ -4,6 +4,7 @@
 #include "../include/display.h"
 #include "../include/paging.h"
 #include "../include/idt.h"
+#include "../include/phys.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x40000000ull
@@ -24,14 +25,14 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         return;
     }
 
-    uint32_t multiboot_info_size = *(const uint32_t *)(uintptr_t)multiboot_data;
+    uint32_t multiboot_info_size = *(const uint32_t *)phys_to_virt(multiboot_data);
     if (multiboot_info_size < 16 || multiboot_info_size > BOOTSTRAP_LIMIT - multiboot_data) {
         print("Invalid Multiboot info size\n");
         return;
     }
 
-    uint64_t kstart = (uint64_t)(uintptr_t)&kernel_start;
-    uint64_t kend = (uint64_t)(uintptr_t)&kernel_end;
+    uint64_t kstart = kernel_virt_to_phys(&kernel_start);
+    uint64_t kend = kernel_virt_to_phys(&kernel_end);
 
     if (kstart >= kend || kend > BOOTSTRAP_LIMIT) {
         print("Kernel is outside the bootstrap map\n");
@@ -77,24 +78,18 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         return;
     }
 
-    uint64_t bitmap_end_address = bitmap_region.end;
-    uint8_t *bitmap_start = (uint8_t *)(uintptr_t)bitmap_region.base;
-    uint8_t *bitmap_end = (uint8_t *)(uintptr_t)bitmap_end_address;
-
-    for (uint64_t address = bitmap_region.base; address < bitmap_end_address; address++)
-        *(uint8_t *)(uintptr_t)address = 0xFF;
-
-    mark_free_memory(kstart, kend, bitmap_region.base, bitmap_end_address, info_start, info_end);
+    bitmap_init(bitmap_region.base, bitmap_region.end - bitmap_region.base);
+    mark_free_memory(kstart, kend, info_start, info_end);
 
     print("Free frames before page tables: ");
-    print_uint(count_free_frames(bitmap_start, bitmap_end));
+    print_uint(count_free_frames());
     print("\n");
 
-    if (!new_tree(bitmap_start, bitmap_end, highest_usable_end))
+    if (!new_tree(highest_usable_end))
         return;
 
     uint64_t first_high_frame = BOOTSTRAP_LIMIT / PAGE_SIZE;
-    uint64_t high_frame = alloc_frame_in_range(bitmap_start, bitmap_end, first_high_frame, max_frames);
+    uint64_t high_frame = alloc_frame_in_range(first_high_frame, max_frames);
 
     if (high_frame == 0) {
         print("No free frame above the bootstrap range\n");
@@ -105,6 +100,6 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
     }
 
     print("Free frames after CR3 switch: ");
-    print_uint(count_free_frames(bitmap_start, bitmap_end));
+    print_uint(count_free_frames());
     print("\n");
 }

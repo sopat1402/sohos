@@ -122,3 +122,13 @@ an idt.c for the plugin code.
 I made a multiboot.h to not redefine structs for multiboot and to clean up the code. Then made memory_regions.c which
 lets me use this memory regions struct and merge and split them as needed. Memory_map.c now doesn't parse mutliboot
 info over and over but instead uses what memory_regions_init gives, where it parses and makes memory regions.
+
+## Physical to Virtual addresses
+
+K so currently it is an identity map. But my kernel is holding uint8_t* pointers and they'll go stale when an offset
+changes because I want to eventually shift to a higher half kernel.
+phys_to_virt and virt_to_phys are for addresses in the direct map. kernel_virt_to_phys is for symbols inside the kernel 
+image (kernel_start, kernel_end), which will use a different formula once the kernel moves to the higher half. It’s the
+identity today, but every kernel-symbol use goes through it so there’s one function to change then.
+
+I'll change it later when I want to make it higher half.

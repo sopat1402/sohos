@@ -1,9 +1,14 @@
 #include <stdint.h>
+#include "../include/phys.h"
 
-static volatile uint8_t *vga = (volatile uint8_t *)0xB8000;
 static uint16_t cursor = 0;
 
+static volatile uint8_t *vga_base(void){
+    return (volatile uint8_t *)phys_to_virt(0xB8000);
+}
+
 void putchar(char c){
+	volatile uint8_t *vga = vga_base();
 	if (cursor >= 80 * 25)
 		return;
 	if (c == '\n') {
@@ -61,7 +66,6 @@ void print_size(uint64_t value) {
     for (int j = 0; j < i; j++)
         remainder /= 1024;
 
-    // Keep one decimal digit using integer arithmetic.
     uint64_t divisor = 1;
     for (int j = 0; j < i; j++)
         divisor *= 1024;

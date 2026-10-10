@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include "../include/multiboot.h"
 #include "../include/memory_regions.h"
+#include "../include/phys.h"
 
 #define REGION_FRAME_SIZE 4096ull
 #define REGION_FLOOR 0x100000ull
@@ -40,7 +41,7 @@ int memory_regions_init(uint64_t multiboot_data){
     if (multiboot_data==0)
         return 0;
 
-    struct multiboot_info *info=(struct multiboot_info *)(uintptr_t)multiboot_data;
+    struct multiboot_info *info=(struct multiboot_info *)phys_to_virt(multiboot_data);
     if (info->total_size<16)
         return 0;
 

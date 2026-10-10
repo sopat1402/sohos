@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include "../include/memory_map.h"
 #include "../include/display.h"
+#include "../include/phys.h"
 
 #define PAGE_SIZE 4096ull
 #define TABLE_ENTRIES 512ull
@@ -18,13 +19,14 @@ static inline void write_cr3(uint64_t pml4_phys) {
     __asm__ volatile ("mov %0, %%cr3" :: "r"(pml4_phys) : "memory");
 }
 
-int new_tree(uint8_t *bitmap_start, uint8_t *bitmap_end, uint64_t highest_usable_end) {
-    if (bitmap_start == 0 || bitmap_end <= bitmap_start || highest_usable_end == 0 || highest_usable_end > LOW_CANONICAL_LIMIT) {
+int new_tree(uint64_t highest_usable_end) {
+    uint64_t bitmap_bits = bitmap_frame_count();
+
+    if (bitmap_bits == 0 || highest_usable_end == 0 || highest_usable_end > LOW_CANONICAL_LIMIT) {
         print("Invalid page-table range\n");
         return 0;
     }
 
-    uint64_t bitmap_bits = (uint64_t)(bitmap_end - bitmap_start) * 8;
     uint64_t max_frames = highest_usable_end / PAGE_SIZE;
     if (highest_usable_end % PAGE_SIZE != 0)
         max_frames++;
@@ -34,25 +36,25 @@ int new_tree(uint8_t *bitmap_start, uint8_t *bitmap_end, uint64_t highest_usable
         return 0;
     }
 
-    uint64_t pml4_phys = alloc_frame_basic(bitmap_start, bitmap_end);
+    uint64_t pml4_phys = alloc_frame_basic();
     if (pml4_phys == 0) {
         print("Could not allocate PML4\n");
         return 0;
     }
 
-    uint64_t *pml4 = (uint64_t *)(uintptr_t)pml4_phys;
+    uint64_t *pml4 = phys_to_virt(pml4_phys);
     uint64_t pml4_count = highest_usable_end / ONE_PDPT_SPAN;
     if (highest_usable_end % ONE_PDPT_SPAN != 0)
         pml4_count++;
 
     for (uint64_t pml4_index = 0; pml4_index < pml4_count; pml4_index++) {
-        uint64_t pdpt_phys = alloc_frame_basic(bitmap_start, bitmap_end);
+        uint64_t pdpt_phys = alloc_frame_basic();
         if (pdpt_phys == 0) {
             print("Could not allocate PDPT\n");
             return 0;
         }
 
-        uint64_t *pdpt = (uint64_t *)(uintptr_t)pdpt_phys;
+        uint64_t *pdpt = phys_to_virt(pdpt_phys);
         pml4[pml4_index] = pdpt_phys | PAGE_FLAGS;
 
         uint64_t pml4_base = pml4_index * ONE_PDPT_SPAN;
@@ -65,13 +67,13 @@ int new_tree(uint8_t *bitmap_start, uint8_t *bitmap_end, uint64_t highest_usable
             pdpt_count++;
 
         for (uint64_t pdpt_index = 0; pdpt_index < pdpt_count; pdpt_index++) {
-            uint64_t pd_phys = alloc_frame_basic(bitmap_start, bitmap_end);
+            uint64_t pd_phys = alloc_frame_basic();
             if (pd_phys == 0) {
                 print("Could not allocate PD\n");
                 return 0;
             }
 
-            uint64_t *pd = (uint64_t *)(uintptr_t)pd_phys;
+            uint64_t *pd = phys_to_virt(pd_phys);
             pdpt[pdpt_index] = pd_phys | PAGE_FLAGS;
 
             uint64_t pd_base = pml4_base + pdpt_index * ONE_GIB;
@@ -90,13 +92,13 @@ int new_tree(uint8_t *bitmap_start, uint8_t *bitmap_end, uint64_t highest_usable
 
                 if (region_base < BOOTSTRAP_MAP_END) {
                     if (region_base == 0 || region_end < region_base + TWO_MIB) {
-                        uint64_t pt_phys = alloc_frame_basic(bitmap_start, bitmap_end);
+                        uint64_t pt_phys = alloc_frame_basic();
                         if (pt_phys == 0) {
                             print("Could not allocate low-memory PT\n");
                             return 0;
                         }
 
-                        uint64_t *pt = (uint64_t *)(uintptr_t)pt_phys;
+                        uint64_t *pt = phys_to_virt(pt_phys);
                         pd[pd_index] = pt_phys | PAGE_FLAGS;
 
                         for (uint64_t pt_index = 0; pt_index < TABLE_ENTRIES; pt_index++) {
@@ -132,10 +134,7 @@ int new_tree(uint8_t *bitmap_start, uint8_t *bitmap_end, uint64_t highest_usable
                         continue;
                     }
 
-                    uint8_t mask = (uint8_t)(1u << (frame % 8));
-                    int is_free = (bitmap_start[frame / 8] & mask) == 0;
-
-                    if (is_free)
+                    if (frame_is_free(frame))
                         any_free = 1;
                     else
                         all_free = 0;
@@ -149,13 +148,13 @@ int new_tree(uint8_t *bitmap_start, uint8_t *bitmap_end, uint64_t highest_usable
                 if (!any_free)
                     continue;
 
-                uint64_t pt_phys = alloc_frame_basic(bitmap_start, bitmap_end);
+                uint64_t pt_phys = alloc_frame_basic();
                 if (pt_phys == 0) {
                     print("Could not allocate high-memory PT\n");
                     return 0;
                 }
 
-                uint64_t *pt = (uint64_t *)(uintptr_t)pt_phys;
+                uint64_t *pt = phys_to_virt(pt_phys);
                 pd[pd_index] = pt_phys | PAGE_FLAGS;
 
                 for (uint64_t pt_index = 0; pt_index < TABLE_ENTRIES; pt_index++) {
@@ -167,12 +166,10 @@ int new_tree(uint8_t *bitmap_start, uint8_t *bitmap_end, uint64_t highest_usable
                         continue;
                     }
 
-                    uint8_t mask = (uint8_t)(1u << (frame % 8));
-                    if ((bitmap_start[frame / 8] & mask) != 0) {
+                    if (!frame_is_free(frame))
                         pt[pt_index] = 0;
-                    } else {
+                    else
                         pt[pt_index] = physical_address | PAGE_FLAGS;
-                    }
                 }
             }
         }
@@ -181,3 +178,13 @@ int new_tree(uint8_t *bitmap_start, uint8_t *bitmap_end, uint64_t highest_usable
     write_cr3(pml4_phys);
     return 1;
 }
+
+/*
+ * What changed:
+ * - new_tree no longer takes bitmap pointers. It reads the bitmap through bitmap_frame_count
+ *   and frame_is_free, and allocates tables with alloc_frame_basic().
+ * - Every table access (pml4, pdpt, pd, pt) now goes through phys_to_virt instead of casting the
+ *   physical address, so the tree can still be edited once the direct map is in use.
+ * - The tree layout, flags and mapping decisions are exactly as before. Only the access paths
+ *   changed. write_cr3 still takes the physical address of the PML4.
+ */
