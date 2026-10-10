@@ -13,4 +13,6 @@ void print_uint(uint64_t value);
 
 void print_size(uint64_t value);
 
+void display_set_cursor(uint16_t row, uint16_t col);
+
 #endif

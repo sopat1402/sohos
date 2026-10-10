@@ -41,7 +41,7 @@ run: $(ISO)
 	qemu-system-x86_64 -m 4G -cdrom $(ISO) -no-reboot -no-shutdown
 
 debug: $(ISO)
-	qemu-system-x86_64 -cdrom $(ISO) -no-reboot -no-shutdown -d int,cpu_reset -D $(BUILD)/qemu.log
+	qemu-system-x86_64 -cdrom $(ISO) -no-reboot -d int,cpu_reset -D $(BUILD)/qemu.log
 
 clean:
 	rm -rf $(BUILD) iso/boot/kernel

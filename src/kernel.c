@@ -2,6 +2,7 @@
 #include "../include/memory_map.h"
 #include "../include/display.h"
 #include "../include/paging.h"
+#include "../include/idt.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x40000000ull
@@ -42,7 +43,7 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("No available memory reported\n");
         return;
     }
-
+    idt_init();
     print("Total usable RAM: ");
     print_size(total_usable_bytes);
     print(" (");
@@ -80,34 +81,9 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
     mark_free_memory(multiboot_data, (uintptr_t)kstart, (uintptr_t)kend, (uintptr_t)bitmap_region.base_addr, (uintptr_t)bitmap_end_address);
 
-    print("Kernel start: ");
-    print_hex(kstart);
-    print("\nKernel end: ");
-    print_hex(kend);
-    print("\nBitmap start: ");
-    print_hex(bitmap_region.base_addr);
-    print("\nBitmap end: ");
-    print_hex(bitmap_end_address);
-    print("\nFree frames before page tables: ");
-    print_uint(count_free_frames(bitmap_start, bitmap_end));
-    print("\n");
-
     if (!new_tree(bitmap_start, bitmap_end, highest_usable_end))
         return;
 
     uint64_t first_high_frame = BOOTSTRAP_LIMIT / PAGE_SIZE;
-    uint64_t high_frame = alloc_frame_in_range(bitmap_start, bitmap_end, first_high_frame, max_frames);
 
-    if (high_frame == 0) {
-        print("No free frame above the bootstrap range\n");
-    } else {
-        print("Allocated and zeroed high frame at: 0x");
-        print_hex(high_frame);
-        print("\n");
-    }
-
-    print("CR3 switched to mixed 4 KiB / 2 MiB identity map\n");
-    print("Free frames after CR3 switch: ");
-    print_uint(count_free_frames(bitmap_start, bitmap_end));
-    print("\n");
 }

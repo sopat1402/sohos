@@ -106,3 +106,15 @@ was searching for the bug in my kernel. Anyways, it now also prints the decimal.
 
 Ok so my number of frames also increased. I'm testing my editing the make with different -m flags. OK so the values do
 in fact scale with changing -m flags in the qemu command.
+
+## IDT
+
+IDT needs to be made for page faults and triple faults to be actually readable stuff. I found a lot of assembly code
+for it but had to filter it and find what would actually work. There's idt.S making the low level functions I need and
+an idt.c for the plugin code.
+
+- Double faults on a bad stack still triple-fault. -> Can be done later with TSS and IST stack for vector 8.
+- Vectors 32 and up aren’t wired -> APIC or PIC
+- The handler halts and never returns -> Interrupts
+
+

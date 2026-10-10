@@ -74,3 +74,7 @@ void print_size(uint64_t value) {
     print(" ");
     print(units[i]);
 }
+
+void display_set_cursor(uint16_t row, uint16_t col){
+    cursor = row * 80 + col;
+}
