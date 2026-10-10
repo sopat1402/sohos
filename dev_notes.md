@@ -117,4 +117,8 @@ an idt.c for the plugin code.
 - Vectors 32 and up aren’t wired -> APIC or PIC
 - The handler halts and never returns -> Interrupts
 
+## Memory map refactor
 
+I made a multiboot.h to not redefine structs for multiboot and to clean up the code. Then made memory_regions.c which
+lets me use this memory regions struct and merge and split them as needed. Memory_map.c now doesn't parse mutliboot
+info over and over but instead uses what memory_regions_init gives, where it parses and makes memory regions.

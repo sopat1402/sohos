@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include "../include/memory_map.h"
+#include "../include/memory_regions.h"
 #include "../include/display.h"
 #include "../include/paging.h"
 #include "../include/idt.h"
@@ -11,6 +12,8 @@ extern char kernel_start;
 extern char kernel_end;
 
 void kmain(uint32_t magic, uint64_t multiboot_data) {
+    idt_init();
+
     if (magic != 0x36d76289) {
         print("Invalid Multiboot magic\n");
         return;
@@ -35,15 +38,14 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         return;
     }
 
-    uint64_t total_usable_bytes = 0;
-    uint64_t highest_usable_end = 0;
-    memory_map_stats(multiboot_data, &total_usable_bytes, &highest_usable_end);
-
-    if (total_usable_bytes == 0 || highest_usable_end == 0) {
+    if (!memory_regions_init(multiboot_data)) {
         print("No available memory reported\n");
         return;
     }
-    idt_init();
+
+    uint64_t total_usable_bytes = memory_regions_total_bytes();
+    uint64_t highest_usable_end = memory_regions_highest_end();
+
     print("Total usable RAM: ");
     print_size(total_usable_bytes);
     print(" (");
@@ -65,25 +67,44 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         return;
     }
 
-    struct multiboot_mmap_entry bitmap_region = bitmap_space(bitmap_bytes, multiboot_data, (uintptr_t)kstart, (uintptr_t)kend);
+    uint64_t info_start = multiboot_data;
+    uint64_t info_end = multiboot_data + multiboot_info_size;
 
-    if (bitmap_region.length == 0 || bitmap_region.base_addr == 0 || bitmap_region.base_addr >= BOOTSTRAP_LIMIT || bitmap_region.length > BOOTSTRAP_LIMIT - bitmap_region.base_addr || bitmap_region.base_addr % PAGE_SIZE != 0 || bitmap_region.length % PAGE_SIZE != 0) {
+    struct mem_region bitmap_region = bitmap_space(bitmap_bytes, kstart, kend, info_start, info_end);
+
+    if (bitmap_region.end <= bitmap_region.base || bitmap_region.end > BOOTSTRAP_LIMIT) {
         print("Bitmap is outside the bootstrap map or invalid\n");
         return;
     }
 
-    uint64_t bitmap_end_address = bitmap_region.base_addr + bitmap_region.length;
-    uint8_t *bitmap_start = (uint8_t *)(uintptr_t)bitmap_region.base_addr;
+    uint64_t bitmap_end_address = bitmap_region.end;
+    uint8_t *bitmap_start = (uint8_t *)(uintptr_t)bitmap_region.base;
     uint8_t *bitmap_end = (uint8_t *)(uintptr_t)bitmap_end_address;
 
-    for (uint64_t address = bitmap_region.base_addr; address < bitmap_end_address; address++)
+    for (uint64_t address = bitmap_region.base; address < bitmap_end_address; address++)
         *(uint8_t *)(uintptr_t)address = 0xFF;
 
-    mark_free_memory(multiboot_data, (uintptr_t)kstart, (uintptr_t)kend, (uintptr_t)bitmap_region.base_addr, (uintptr_t)bitmap_end_address);
+    mark_free_memory(kstart, kend, bitmap_region.base, bitmap_end_address, info_start, info_end);
+
+    print("Free frames before page tables: ");
+    print_uint(count_free_frames(bitmap_start, bitmap_end));
+    print("\n");
 
     if (!new_tree(bitmap_start, bitmap_end, highest_usable_end))
         return;
 
     uint64_t first_high_frame = BOOTSTRAP_LIMIT / PAGE_SIZE;
+    uint64_t high_frame = alloc_frame_in_range(bitmap_start, bitmap_end, first_high_frame, max_frames);
 
+    if (high_frame == 0) {
+        print("No free frame above the bootstrap range\n");
+    } else {
+        print("Allocated and zeroed high frame at: 0x");
+        print_hex(high_frame);
+        print("\n");
+    }
+
+    print("Free frames after CR3 switch: ");
+    print_uint(count_free_frames(bitmap_start, bitmap_end));
+    print("\n");
 }
