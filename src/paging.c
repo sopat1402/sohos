@@ -179,12 +179,3 @@ int new_tree(uint64_t highest_usable_end) {
     return 1;
 }
 
-/*
- * What changed:
- * - new_tree no longer takes bitmap pointers. It reads the bitmap through bitmap_frame_count
- *   and frame_is_free, and allocates tables with alloc_frame_basic().
- * - Every table access (pml4, pdpt, pd, pt) now goes through phys_to_virt instead of casting the
- *   physical address, so the tree can still be edited once the direct map is in use.
- * - The tree layout, flags and mapping decisions are exactly as before. Only the access paths
- *   changed. write_cr3 still takes the physical address of the PML4.
- */
