@@ -1,181 +1,119 @@
 #include <stdint.h>
+#include "../include/paging.h"
 #include "../include/memory_map.h"
+#include "../include/memory_regions.h"
 #include "../include/display.h"
 #include "../include/phys.h"
 
 #define PAGE_SIZE 4096ull
-#define TABLE_ENTRIES 512ull
-#define TWO_MIB (TABLE_ENTRIES * PAGE_SIZE)
-#define ONE_GIB (TABLE_ENTRIES * TWO_MIB)
-#define ONE_PDPT_SPAN (TABLE_ENTRIES * ONE_GIB)
-#define LOW_CANONICAL_LIMIT (1ull << 47)
-#define BOOTSTRAP_MAP_END ONE_GIB
-#define PAGE_FLAGS 0x3ull
-#define LARGE_PAGE_FLAGS 0x83ull
+#define TWO_MIB 0x200000ull
+#define CANONICAL_LIMIT (1ull << 47)
+#define ADDRESS_MASK 0x000FFFFFFFFFF000ull
+#define FLAG_PRESENT 0x1ull
+#define FLAG_HUGE 0x80ull
+#define TABLE_FLAGS 0x3ull
+#define RAM_FLAGS 0x3ull
+#define MMIO_FLAGS 0x1Bull
 #define VGA_ADDRESS 0xB8000ull
-#define VGA_FLAGS 0x1Bull
 
 static inline void write_cr3(uint64_t pml4_phys) {
     __asm__ volatile ("mov %0, %%cr3" :: "r"(pml4_phys) : "memory");
 }
 
-int new_tree(uint64_t highest_usable_end) {
-    uint64_t bitmap_bits = bitmap_frame_count();
+static uint64_t *next_table(uint64_t *table, uint64_t index){
+    if ((table[index] & FLAG_PRESENT) == 0){
+        uint64_t frame = alloc_frame_basic();
+        if (frame == 0)
+            return 0;
+        table[index] = frame | TABLE_FLAGS;
+    }
+    return (uint64_t *)phys_to_virt(table[index] & ADDRESS_MASK);
+}
 
-    if (bitmap_bits == 0 || highest_usable_end == 0 || highest_usable_end > LOW_CANONICAL_LIMIT) {
+static int map_4k(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags){
+    uint64_t *pdpt = next_table(pml4, (virt >> 39) & 0x1FF);
+    if (pdpt == 0)
+        return 0;
+    uint64_t *pd = next_table(pdpt, (virt >> 30) & 0x1FF);
+    if (pd == 0)
+        return 0;
+    uint64_t pd_index = (virt >> 21) & 0x1FF;
+    if (pd[pd_index] & FLAG_HUGE)
+        return 0;
+    uint64_t *pt = next_table(pd, pd_index);
+    if (pt == 0)
+        return 0;
+    pt[(virt >> 12) & 0x1FF] = phys | flags;
+    return 1;
+}
+
+static int map_2m(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags){
+    uint64_t *pdpt = next_table(pml4, (virt >> 39) & 0x1FF);
+    if (pdpt == 0)
+        return 0;
+    uint64_t *pd = next_table(pdpt, (virt >> 30) & 0x1FF);
+    if (pd == 0)
+        return 0;
+    uint64_t pd_index = (virt >> 21) & 0x1FF;
+    if (pd[pd_index] & FLAG_PRESENT)
+        return 0;
+    pd[pd_index] = phys | flags | FLAG_HUGE;
+    return 1;
+}
+
+static int map_range(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t size, uint64_t flags){
+    uint64_t end = virt + size;
+    while (virt < end){
+        if (((virt | phys) & (TWO_MIB - 1)) == 0 && end - virt >= TWO_MIB){
+            if (!map_2m(pml4, virt, phys, flags))
+                return 0;
+            virt += TWO_MIB;
+            phys += TWO_MIB;
+        } else {
+            if (!map_4k(pml4, virt, phys, flags))
+                return 0;
+            virt += PAGE_SIZE;
+            phys += PAGE_SIZE;
+        }
+    }
+    return 1;
+}
+
+int new_tree(uint64_t kstart, uint64_t kend){
+    if (memory_region_count() == 0 || memory_regions_highest_end() > CANONICAL_LIMIT){
         print("Invalid page-table range\n");
         return 0;
     }
 
-    uint64_t max_frames = highest_usable_end / PAGE_SIZE;
-    if (highest_usable_end % PAGE_SIZE != 0)
-        max_frames++;
-
-    if (max_frames > bitmap_bits) {
-        print("Bitmap does not cover the usable address range\n");
-        return 0;
-    }
-
     uint64_t pml4_phys = alloc_frame_basic();
-    if (pml4_phys == 0) {
+    if (pml4_phys == 0){
         print("Could not allocate PML4\n");
         return 0;
     }
+    uint64_t *pml4 = (uint64_t *)phys_to_virt(pml4_phys);
 
-    uint64_t *pml4 = phys_to_virt(pml4_phys);
-    uint64_t pml4_count = highest_usable_end / ONE_PDPT_SPAN;
-    if (highest_usable_end % ONE_PDPT_SPAN != 0)
-        pml4_count++;
+    uint64_t k_start = kstart & ~(PAGE_SIZE - 1);
+    uint64_t k_end = (kend + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
-    for (uint64_t pml4_index = 0; pml4_index < pml4_count; pml4_index++) {
-        uint64_t pdpt_phys = alloc_frame_basic();
-        if (pdpt_phys == 0) {
-            print("Could not allocate PDPT\n");
+    if (!map_range(pml4, k_start, k_start, k_end - k_start, RAM_FLAGS) || !map_4k(pml4, VGA_ADDRESS, VGA_ADDRESS, MMIO_FLAGS)){
+        print("Could not build the identity bridge\n");
+        return 0;
+    }
+
+    for (uint32_t r = 0; r < memory_region_count(); r++){
+        const struct mem_region *region = memory_region_get(r);
+        if (!map_range(pml4, HHDM_BASE + region->base, region->base, region->end - region->base, RAM_FLAGS)){
+            print("Could not build the direct map\n");
             return 0;
-        }
-
-        uint64_t *pdpt = phys_to_virt(pdpt_phys);
-        pml4[pml4_index] = pdpt_phys | PAGE_FLAGS;
-
-        uint64_t pml4_base = pml4_index * ONE_PDPT_SPAN;
-        uint64_t pml4_end = pml4_base + ONE_PDPT_SPAN;
-        if (pml4_end > highest_usable_end)
-            pml4_end = highest_usable_end;
-
-        uint64_t pdpt_count = (pml4_end - pml4_base) / ONE_GIB;
-        if ((pml4_end - pml4_base) % ONE_GIB != 0)
-            pdpt_count++;
-
-        for (uint64_t pdpt_index = 0; pdpt_index < pdpt_count; pdpt_index++) {
-            uint64_t pd_phys = alloc_frame_basic();
-            if (pd_phys == 0) {
-                print("Could not allocate PD\n");
-                return 0;
-            }
-
-            uint64_t *pd = phys_to_virt(pd_phys);
-            pdpt[pdpt_index] = pd_phys | PAGE_FLAGS;
-
-            uint64_t pd_base = pml4_base + pdpt_index * ONE_GIB;
-            uint64_t pd_end = pd_base + ONE_GIB;
-            if (pd_end > highest_usable_end)
-                pd_end = highest_usable_end;
-
-            for (uint64_t pd_index = 0; pd_index < TABLE_ENTRIES; pd_index++) {
-                uint64_t region_base = pd_base + pd_index * TWO_MIB;
-                if (region_base >= pd_end)
-                    break;
-
-                uint64_t region_end = region_base + TWO_MIB;
-                if (region_end > pd_end)
-                    region_end = pd_end;
-
-                if (region_base < BOOTSTRAP_MAP_END) {
-                    if (region_base == 0 || region_end < region_base + TWO_MIB) {
-                        uint64_t pt_phys = alloc_frame_basic();
-                        if (pt_phys == 0) {
-                            print("Could not allocate low-memory PT\n");
-                            return 0;
-                        }
-
-                        uint64_t *pt = phys_to_virt(pt_phys);
-                        pd[pd_index] = pt_phys | PAGE_FLAGS;
-
-                        for (uint64_t pt_index = 0; pt_index < TABLE_ENTRIES; pt_index++) {
-                            uint64_t physical_address = region_base + pt_index * PAGE_SIZE;
-
-                            if (physical_address >= region_end || physical_address == 0) {
-                                pt[pt_index] = 0;
-                            } else if (physical_address == VGA_ADDRESS) {
-                                pt[pt_index] = physical_address | VGA_FLAGS;
-                            } else {
-                                pt[pt_index] = physical_address | PAGE_FLAGS;
-                            }
-                        }
-                    } else {
-                        pd[pd_index] = region_base | LARGE_PAGE_FLAGS;
-                    }
-
-                    continue;
-                }
-
-                uint64_t first_frame = region_base / PAGE_SIZE;
-                uint64_t last_frame = region_end / PAGE_SIZE;
-                if (region_end % PAGE_SIZE != 0)
-                    last_frame++;
-
-                uint64_t frames_in_region = last_frame - first_frame;
-                int any_free = 0;
-                int all_free = frames_in_region == TABLE_ENTRIES;
-
-                for (uint64_t frame = first_frame; frame < last_frame; frame++) {
-                    if (frame >= bitmap_bits) {
-                        all_free = 0;
-                        continue;
-                    }
-
-                    if (frame_is_free(frame))
-                        any_free = 1;
-                    else
-                        all_free = 0;
-                }
-
-                if (all_free && region_end == region_base + TWO_MIB) {
-                    pd[pd_index] = region_base | LARGE_PAGE_FLAGS;
-                    continue;
-                }
-
-                if (!any_free)
-                    continue;
-
-                uint64_t pt_phys = alloc_frame_basic();
-                if (pt_phys == 0) {
-                    print("Could not allocate high-memory PT\n");
-                    return 0;
-                }
-
-                uint64_t *pt = phys_to_virt(pt_phys);
-                pd[pd_index] = pt_phys | PAGE_FLAGS;
-
-                for (uint64_t pt_index = 0; pt_index < TABLE_ENTRIES; pt_index++) {
-                    uint64_t frame = first_frame + pt_index;
-                    uint64_t physical_address = frame * PAGE_SIZE;
-
-                    if (frame >= last_frame || frame >= bitmap_bits) {
-                        pt[pt_index] = 0;
-                        continue;
-                    }
-
-                    if (!frame_is_free(frame))
-                        pt[pt_index] = 0;
-                    else
-                        pt[pt_index] = physical_address | PAGE_FLAGS;
-                }
-            }
         }
     }
 
+    if (!map_4k(pml4, HHDM_BASE + VGA_ADDRESS, VGA_ADDRESS, MMIO_FLAGS)){
+        print("Could not map VGA in the direct map\n");
+        return 0;
+    }
+
     write_cr3(pml4_phys);
+    phys_set_hhdm_offset(HHDM_BASE);
     return 1;
 }
-

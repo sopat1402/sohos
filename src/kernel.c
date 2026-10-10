@@ -80,13 +80,16 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
     bitmap_init(bitmap_region.base, bitmap_region.end - bitmap_region.base);
     mark_free_memory(kstart, kend, info_start, info_end);
-
     print("Free frames before page tables: ");
     print_uint(count_free_frames());
     print("\n");
 
-    if (!new_tree(highest_usable_end))
+    if (!new_tree(kstart, kend))
         return;
+
+    print("Direct map live at 0x");
+    print_hex(hhdm_offset);
+    print("\n");
 
     uint64_t first_high_frame = BOOTSTRAP_LIMIT / PAGE_SIZE;
     uint64_t high_frame = alloc_frame_in_range(first_high_frame, max_frames);

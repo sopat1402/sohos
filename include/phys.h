@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
+#define HHDM_BASE 0xFFFF800000000000ull
 extern uint64_t hhdm_offset;
-
 void phys_set_hhdm_offset(uint64_t offset);
 
 static inline void *phys_to_virt(uint64_t phys){

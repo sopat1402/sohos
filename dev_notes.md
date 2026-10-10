@@ -34,7 +34,7 @@ musty old VGA up from its tomb.
 The code is parsing the structs sent by GRUB but now, it is just printing it. Later a frame allocation using buddy
 allocation must come into picture.
 
-# Frame allocation
+# Memory
 
 ## Making a bitmap
 
@@ -132,3 +132,18 @@ image (kernel_start, kernel_end), which will use a different formula once the ke
 identity today, but every kernel-symbol use goes through it so there’s one function to change then.
 
 I'll change it later when I want to make it higher half.
+
+## Final translator switch
+
+I need to construct new page tables and have direct mapping. Nested per GiB loops are gone from the paging.c code.
+Instead, there's map_4k and map_2m. A few API changes in new tree where it takes kstart and kend instead of highest
+usable address.
+new_tree builds a direct map of every region in the memory-region array at HHDM_BASE, maps VGA explicitly (uncached) 
+at HHDM_BASE + 0xB8000, and builds a temporary identity bridge for the kernel image and the VGA page so execution 
+survives the cr3 write. RAM is no longer identity mapped, and page 0 stays unmapped
+Right after write_cr3, new_tree sets the phys_to_virt offset to HHDM_BASE. The signature changed to take the kernel's 
+physical range instead of the bitmap pointers and highest address. Overlap mistakes return 0 instead of overwriting 
+existing entries. Flags are present and writable only. NX and per-section permissions come later
+
+I tested a leak too. It does give a page fault with exception 14 at the end so that means it reached there and can
+process leaks with the new addresses.

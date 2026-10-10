@@ -3,6 +3,6 @@
 
 #include <stdint.h>
 
-int new_tree(uint64_t highest_usable_end);
+int new_tree(uint64_t kstart, uint64_t kend);
 
 #endif
