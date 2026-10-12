@@ -6,6 +6,7 @@
 #include "../include/idt.h"
 #include "../include/phys.h"
 #include "../include/buddy.h"
+#include "../include/ap_boot.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x40000000ull
@@ -15,6 +16,10 @@ extern char __kernel_phys_start;
 extern char __kernel_phys_end;
 extern char __kernel_virt_start;
 extern char __kernel_virt_end;
+
+static struct rsdp_v2 boot_rsdp;
+static uint8_t boot_rsdp_revision;
+static struct cpu_preapic_info bsp_cpu;
 
 void kmain(uint32_t magic, uint64_t multiboot_data) {
     idt_init();
@@ -34,6 +39,37 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("[error] Invalid Multiboot info size\n");
         return;
     }
+
+    print("Checking CPU...\n");
+    const void *mbi = phys_to_virt(multiboot_data);
+    int rsdp_status = mb2_find_acpi_rsdp(
+        mbi,
+        (uint32_t)(BOOTSTRAP_LIMIT - multiboot_data),
+        &boot_rsdp,
+        &boot_rsdp_revision
+    );
+    if (rsdp_status == 1) {
+        print("ACPI RSDP revision: ");
+        print_uint(boot_rsdp_revision);
+        print("\n");
+    } else if (rsdp_status == 0) {
+        print("No ACPI RSDP tag in Multiboot info\n");
+    } else {
+        print("Malformed Multiboot ACPI RSDP tag\n");
+    }
+    if (!cpu_probe_preapic(&bsp_cpu)) {
+        print("CPUID probe failed\n");
+        return;
+    }
+    print("CPU vendor: ");
+    print(bsp_cpu.vendor);
+    print("\nBSP APIC ID: ");
+    print_uint(bsp_cpu.bsp_apic_id);
+    print("\n");
+    if (!bsp_cpu.has_apic)
+        print("CPU reports no Local APIC support\n");
+    if (bsp_cpu.has_apic && !bsp_cpu.lapic_enabled)
+        print("Local APIC is currently disabled\n");
 
     print("Loading RAM...\n");
     uint64_t image_phys_start = (uint64_t)(uintptr_t)&__image_phys_start;
@@ -70,9 +106,7 @@ if (image_phys_start >= image_phys_end ||
     print_size(total_usable_bytes);
     print(" (");
     print_uint(total_usable_bytes);
-    print(" bytes)\nHighest usable physical address: 0x");
-    print_hex(highest_usable_end);
-    print("\n");
+    print(" bytes)\n");
 
     uint64_t max_frames = highest_usable_end / PAGE_SIZE;
     if (highest_usable_end % PAGE_SIZE != 0)
@@ -102,12 +136,8 @@ if (image_phys_start >= image_phys_end ||
 
     if (!new_tree(kernel_phys_start, kernel_phys_end,kernel_virt_start, kernel_virt_end))
         return;
-    print("Direct map is live at 0x");
-    print_hex(hhdm_offset);
-    print("\n");
 
-    if (!buddy_init(bitmap_region.base,
-                    bitmap_region.end - bitmap_region.base)) {
+    if (!buddy_init(bitmap_region.base,bitmap_region.end - bitmap_region.base)) {
         print("[error] Buddy allocator initialization failed\n");
         return;
     }

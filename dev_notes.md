@@ -182,7 +182,7 @@ jumped to the new virtual address. The kmain RIP was 0xFFFFFFFF80000626, which i
 
 ## Buddy Allocator
 
-THis is massive code. It must not only merge zones of low order when possible but must also reclaim the original
+This is massive code. It must not only merge zones of low order when possible but must also reclaim the original
 bitmap's space as it was only needed for the initial frame allocation for a new tree and stack.
 
 So, here's the boot sequence:
@@ -220,3 +220,25 @@ using assembly. I used to wonder why spinlocks. Because mutexes aren't low level
 
 Zeroing a block has to happen AFTER unlocking otherwise zeroing a large block while holding the spinlock will burn
 CPU and slow the whole thing down.
+
+I now have to read APIC data so must read RSDP, which will eventually lead me to a MADT table. Before sending SIPI, I
+have to allocate the AP stack and handoff data while the BSP is still active.
+
+cpu_probe_preapic reads cpuid to see if there's ap and if it is supported and looks at the IA32 APIC BASE but does not
+change it (read only). the mb2_find_acpi_rsdp function is explaining itself through its name : it is checking the
+multiboot 2 info for rsdp data. it has 3 kinds of returns:
+
+ -  1 valid RSDP found, copied to out
+ -  0: no ACPI RSDP tag
+ - -1: bad Multiboot info / invalid RSDP tag
+
+CPUID.1 edx[5] = MSR, EDX[9] = APIC.
+CPUID.1 ecv[21] = x2APIC support
+Legacy 8-bit APIC ID fallback from CPUID.1:EBX[31:24]
+
+There's an 8 byte multiboot info (already designed and used) and then the mb2 info I need starts at 8 byte boundaries.
+I got the data above from a loooong deep dive on kernel.org and anyways, I made it prefer v2 rsdp data but if that isn't
+there it takes v1.
+
+With qemu, the above says the CPU vendor is AuthenticAMD. Is it actually that for my CPU? idgaf. anyways, now I need to
+follow the rsdp to acpi tables and discover the madt. so far I am not discovering other CPUs yet.

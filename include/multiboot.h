@@ -31,4 +31,20 @@ struct multiboot_mmap_entry {
     uint32_t reserved;
 };
 
+struct rsdp_v1 {
+    char signature[8];
+    uint8_t checksum;
+    char oem_id[6];
+    uint8_t revision;
+    uint32_t rsdt_address;
+} __attribute__((packed));
+
+struct rsdp_v2 {
+    struct rsdp_v1 v1;
+    uint32_t length;
+    uint64_t xsdt_address;
+    uint8_t extended_checksum;
+    uint8_t reserved[3];
+} __attribute__((packed));
+
 #endif
