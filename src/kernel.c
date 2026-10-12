@@ -17,28 +17,21 @@ extern char __kernel_virt_start;
 extern char __kernel_virt_end;
 
 void kmain(uint32_t magic, uint64_t multiboot_data) {
-    uintptr_t rip;
-    __asm__ volatile ("lea 0(%%rip), %0" : "=r"(rip));
-
-    print("kmain RIP=0x");
-    print_hex(rip);
-    print("\n");
-
     idt_init();
 
     if (magic != 0x36d76289) {
-        print("Invalid Multiboot magic\n");
+        print("[error] Invalid Multiboot magic\n");
         return;
     }
 
     if (multiboot_data == 0 || multiboot_data >= BOOTSTRAP_LIMIT || BOOTSTRAP_LIMIT - multiboot_data < sizeof(uint32_t)) {
-        print("Multiboot info is outside the bootstrap map\n");
+        print("[error] Multiboot info is outside the bootstrap map\n");
         return;
     }
 
     uint32_t multiboot_info_size = *(const uint32_t *)phys_to_virt(multiboot_data);
     if (multiboot_info_size < 16 || multiboot_info_size > BOOTSTRAP_LIMIT - multiboot_data) {
-        print("Invalid Multiboot info size\n");
+        print("[error] Invalid Multiboot info size\n");
         return;
     }
 
@@ -57,16 +50,16 @@ if (image_phys_start >= image_phys_end ||
     kernel_virt_end <= kernel_virt_start ||
     kernel_phys_end - kernel_phys_start !=
         kernel_virt_end - kernel_virt_start) {
-    print("Invalid kernel load or virtual range\n");
+    print("[error] Invalid kernel load or virtual range\n");
     return;
 }
     if (kernel_phys_start >= kernel_phys_end || kernel_phys_end > BOOTSTRAP_LIMIT) {
-        print("Kernel is outside the bootstrap map\n");
+        print("[error] Kernel is outside the bootstrap map\n");
         return;
     }
 
     if (!memory_regions_init(multiboot_data)) {
-        print("No available memory reported\n");
+        print("[error] No available memory reported\n");
         return;
     }
 
@@ -90,7 +83,7 @@ if (image_phys_start >= image_phys_end ||
         bitmap_bytes++;
 
     if (bitmap_bytes == 0) {
-        print("Bitmap size is zero\n");
+        print("[error] Bitmap size is zero\n");
         return;
     }
 
@@ -100,42 +93,23 @@ if (image_phys_start >= image_phys_end ||
     struct mem_region bitmap_region = bitmap_space(bitmap_bytes, image_phys_start, image_phys_end, info_start, info_end);
 
     if (bitmap_region.end <= bitmap_region.base || bitmap_region.end > BOOTSTRAP_LIMIT) {
-        print("Bitmap is outside the bootstrap map or invalid\n");
+        print("[error] Bitmap is outside the bootstrap map or invalid\n");
         return;
     }
 
     bitmap_init(bitmap_region.base, bitmap_region.end - bitmap_region.base);
     mark_free_memory(image_phys_start, image_phys_end, info_start, info_end);
-    print("Free frames before page tables: ");
-    print_uint(count_free_frames());
-    print("\n");
 
     if (!new_tree(kernel_phys_start, kernel_phys_end,kernel_virt_start, kernel_virt_end))
         return;
-    print("Direct map live at 0x");
+    print("Direct map is live at 0x");
     print_hex(hhdm_offset);
     print("\n");
 
     if (!buddy_init(bitmap_region.base,
                     bitmap_region.end - bitmap_region.base)) {
-        print("Buddy allocator initialization failed\n");
+        print("[error] Buddy allocator initialization failed\n");
         return;
     }
 
-    print("Buddy free pages: ");
-    print_uint(buddy_available_pages());
-    print("\n");
-
-    uint64_t test_frame = buddy_alloc_order(0);
-
-    if (!test_frame) {
-        print("Buddy allocation failed\n");
-    } else {
-        print("Buddy allocated frame at 0x");
-        print_hex(test_frame);
-        print("\n");
-
-        if (!buddy_free_order(test_frame, 0))
-            print("Buddy free test failed\n");
-    }
 }

@@ -208,3 +208,15 @@ too.
 
 The rest is either direct implementation from a youtube video explaining the algorithm or a helper for metadata to
 track pages or to return bitmap pages.
+
+# Multi core support
+
+Before slab I have to add SMP, read the APIC MADT, get the local APIC data and start APs. I will have to use a spinlock
+on the buddy allocator so that many cores running this don't turn my page table into abstract art.
+
+K so I added a simple spinlock.h ; I was surprised tbh that atomics work here and I guess all features don't because
+they need libatomics, which isn't there at this level. Spinlock functions are static inline, the lock calls x86 pause
+using assembly. I used to wonder why spinlocks. Because mutexes aren't low level enough and have a whole wait queue.
+
+Zeroing a block has to happen AFTER unlocking otherwise zeroing a large block while holding the spinlock will burn
+CPU and slow the whole thing down.
