@@ -288,3 +288,27 @@ Basically the trampoline is like a mini bootloader for the APs because they can'
 C code. One AP has 0x08 as a result of its trampoline but the other(s) in protected mode see 64 bit and triple fault.
 
 Yep that was it. It is fixed now. Changed it to 0x18.
+
+# SLUB
+
+Efficient for kernel objects smaller than a page. Nice to have. Free list linking slabs. Slabs are a page split into
+slots for objects in a cache. kmalloc-64 cache -> 64 byte slots.
+
+When code asks for an object:
+
+1) SLUB looks for a free slot in the cache.
+2) If one is available, it removes it from the freelist and returns it.
+3) If the current slab is full, it finds another slab with free slots.
+4) If there isn’t one, SLUB asks the buddy allocator for pages and splits them into slots.
+
+After a basic allocator for SLUB with a single freelist for all CPUs with a spinlock on it, I can look at a per CPU
+free list but that needs reliable per CPU state. It can come later tbh. SLUB itself is a push for a single dev.
+
+slab->pages is virtual uint64_t. The free list is of free_obj
+
+slab_alloc pops one slot from that slab’s freelist. Return the object pointer, or NULL if the slab is empty
+
+cache's metadata lives inside the slab block, object size and alignment calculations need stronger bounds checks.
+
+Currently there is only a single spinlock per cache, which is quite a bottleneck but I'd like to have at least an MVP,
+I can always refactor this later.
