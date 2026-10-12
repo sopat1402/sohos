@@ -5,6 +5,7 @@
 #include "../include/paging.h"
 #include "../include/idt.h"
 #include "../include/phys.h"
+#include "../include/buddy.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x40000000ull
@@ -41,6 +42,7 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         return;
     }
 
+    print("Loading RAM...\n");
     uint64_t image_phys_start = (uint64_t)(uintptr_t)&__image_phys_start;
     uint64_t image_phys_end   = (uint64_t)(uintptr_t)&__kernel_phys_end;
 
@@ -114,18 +116,26 @@ if (image_phys_start >= image_phys_end ||
     print_hex(hhdm_offset);
     print("\n");
 
-    uint64_t first_high_frame = BOOTSTRAP_LIMIT / PAGE_SIZE;
-    uint64_t high_frame = alloc_frame_in_range(first_high_frame, max_frames);
-
-    if (high_frame == 0) {
-        print("No free frame above the bootstrap range\n");
-    } else {
-        print("Allocated and zeroed high frame at: 0x");
-        print_hex(high_frame);
-        print("\n");
+    if (!buddy_init(bitmap_region.base,
+                    bitmap_region.end - bitmap_region.base)) {
+        print("Buddy allocator initialization failed\n");
+        return;
     }
 
-    print("Free frames after CR3 switch: ");
-    print_uint(count_free_frames());
+    print("Buddy free pages: ");
+    print_uint(buddy_available_pages());
     print("\n");
+
+    uint64_t test_frame = buddy_alloc_order(0);
+
+    if (!test_frame) {
+        print("Buddy allocation failed\n");
+    } else {
+        print("Buddy allocated frame at 0x");
+        print_hex(test_frame);
+        print("\n");
+
+        if (!buddy_free_order(test_frame, 0))
+            print("Buddy free test failed\n");
+    }
 }

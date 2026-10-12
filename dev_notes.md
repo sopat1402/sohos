@@ -179,3 +179,32 @@ this shifts the stack from a low bootstrap stack to the high kernel one.
 
 Essentially, I created a new virtual address that points to the same physical address, made the mapping work and then
 jumped to the new virtual address. The kmain RIP was 0xFFFFFFFF80000626, which is in the high virtual memory zone.
+
+## Buddy Allocator
+
+THis is massive code. It must not only merge zones of low order when possible but must also reclaim the original
+bitmap's space as it was only needed for the initial frame allocation for a new tree and stack.
+
+So, here's the boot sequence:
+
+1) memory_regions_init() reads the Multiboot map and records usable physical ranges
+2) The bitmap starts with frames unavailable, then mark_free_memory() marks usable frames free and reserves the 
+    kernel image, bitmap, and Multiboot information
+3) new_tree() uses the bitmap to allocate its page-table frames. At this point the HHDM is not active yet. HHDM is
+    higher half direct map and has an offset of 0XFFFF800000000000.
+4) new_tree() switches to the new page tables and sets hhdm_offset
+5) buddy_init() reads the bitmap’s frame status, builds the buddy free lists, and returns the now useless bitmap 
+    pages to the buddy allocator.
+
+A block’s buddy is the other half of the larger block it could combine with. For a block of 2^order pages, its buddy 
+is found by xor of its physical address with the block size. They can merge only when both blocks are free and the same 
+order and in the same usable region.
+
+Physical page 0 is not usable. There is one linked list per order. Its head is a physical address, zero means the 
+order has no free blocks.
+
+make_state, state_kind, state_order pack a block's kind, order into a single byte. They are then used to extract it
+too.
+
+The rest is either direct implementation from a youtube video explaining the algorithm or a helper for metadata to
+track pages or to return bitmap pages.
