@@ -9,7 +9,7 @@
 #include "../include/ap_boot.h"
 
 #define PAGE_SIZE 4096ull
-#define BOOTSTRAP_LIMIT 0x40000000ull
+#define BOOTSTRAP_LIMIT 0x100000000ULL
 
 extern char __image_phys_start;
 extern char __kernel_phys_start;
@@ -20,10 +20,11 @@ extern char __kernel_virt_end;
 static struct rsdp_v2 boot_rsdp;
 static uint8_t boot_rsdp_revision;
 static struct cpu_preapic_info bsp_cpu;
-
+static struct ap_boot_plan ap_plan;
+static int ap_plan_ready;
 void kmain(uint32_t magic, uint64_t multiboot_data) {
     idt_init();
-
+    print("Welcome to SOHOS!\n");
     if (magic != 0x36d76289) {
         print("[error] Invalid Multiboot magic\n");
         return;
@@ -70,6 +71,34 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("CPU reports no Local APIC support\n");
     if (bsp_cpu.has_apic && !bsp_cpu.lapic_enabled)
         print("Local APIC is currently disabled\n");
+    if (rsdp_status == 1 && bsp_cpu.has_apic && bsp_cpu.has_msr) {
+        int ap_status = ap_prepare_early(
+            mbi,
+            multiboot_data,
+            multiboot_info_size,
+            &boot_rsdp,
+            boot_rsdp_revision,
+            bsp_cpu.bsp_apic_id,
+            &ap_plan
+        );
+
+        if (ap_status < 0) {
+            print("[error] AP preparation failed\n");
+            return;
+        }
+
+        ap_plan_ready = (ap_status == 1);
+
+        if (ap_plan_ready) {
+            print("Prepared APs: ");
+            print_uint(ap_plan.ap_count);
+            print("\n");
+        } else {
+            print("MADT has no secondary APs to start\n");
+        }
+    } else {
+        print("AP startup unavailable: missing ACPI or APIC support\n");
+    }
 
     print("Loading RAM...\n");
     uint64_t image_phys_start = (uint64_t)(uintptr_t)&__image_phys_start;
@@ -80,15 +109,15 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
     uint64_t kernel_virt_start = (uint64_t)(uintptr_t)&__kernel_virt_start;
     uint64_t kernel_virt_end   = (uint64_t)(uintptr_t)&__kernel_virt_end;
 
-if (image_phys_start >= image_phys_end ||
-    image_phys_end > BOOTSTRAP_LIMIT ||
-    kernel_phys_end <= kernel_phys_start ||
-    kernel_virt_end <= kernel_virt_start ||
-    kernel_phys_end - kernel_phys_start !=
-        kernel_virt_end - kernel_virt_start) {
-    print("[error] Invalid kernel load or virtual range\n");
-    return;
-}
+    if (image_phys_start >= image_phys_end ||
+        image_phys_end > BOOTSTRAP_LIMIT ||
+        kernel_phys_end <= kernel_phys_start ||
+        kernel_virt_end <= kernel_virt_start ||
+        kernel_phys_end - kernel_phys_start !=
+            kernel_virt_end - kernel_virt_start) {
+        print("[error] Invalid kernel load or virtual range\n");
+        return;
+    }
     if (kernel_phys_start >= kernel_phys_end || kernel_phys_end > BOOTSTRAP_LIMIT) {
         print("[error] Kernel is outside the bootstrap map\n");
         return;
@@ -134,12 +163,22 @@ if (image_phys_start >= image_phys_end ||
     bitmap_init(bitmap_region.base, bitmap_region.end - bitmap_region.base);
     mark_free_memory(image_phys_start, image_phys_end, info_start, info_end);
 
-    if (!new_tree(kernel_phys_start, kernel_phys_end,kernel_virt_start, kernel_virt_end))
+    if (!new_tree(kernel_phys_start,kernel_phys_end,kernel_virt_start,kernel_virt_end,ap_plan_ready ? ap_plan.trampoline_phys : 0,ap_plan_ready ? ap_plan.lapic_phys : 0)) {
+        print("[error] Page-table setup failed\n");
         return;
-
+    }
     if (!buddy_init(bitmap_region.base,bitmap_region.end - bitmap_region.base)) {
         print("[error] Buddy allocator initialization failed\n");
         return;
     }
 
+    print("Starting available CPU cores...\n");
+    if (ap_plan_ready) {
+        if (!ap_start_all(&ap_plan)) {
+            print("[error] AP startup failed\n");
+            return;
+        }
+
+        print("All MADT APs are online\n");
+    }
 }

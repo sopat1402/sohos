@@ -166,7 +166,7 @@ switch happened here:
 movabs rax, OFFSET FLAT:higher_half_entry
 jmp rax
 
-0xFFFFFFFF80000000 → physical 0x200000
+0xFFFFFFFF80000000 → physical 0x200000 or is it 0xFFFF800000000000?
 That's the mapping for the start of the kernel image. The page-table entries use 2 MiB pages, so each entry 
 maps a 2 MiB physical region to a corresponding virtual region
 
@@ -233,7 +233,7 @@ multiboot 2 info for rsdp data. it has 3 kinds of returns:
  - -1: bad Multiboot info / invalid RSDP tag
 
 CPUID.1 edx[5] = MSR, EDX[9] = APIC.
-CPUID.1 ecv[21] = x2APIC support
+CPUID.1 ecx[21] = x2APIC support
 Legacy 8-bit APIC ID fallback from CPUID.1:EBX[31:24]
 
 There's an 8 byte multiboot info (already designed and used) and then the mb2 info I need starts at 8 byte boundaries.
@@ -241,4 +241,50 @@ I got the data above from a loooong deep dive on kernel.org and anyways, I made 
 there it takes v1.
 
 With qemu, the above says the CPU vendor is AuthenticAMD. Is it actually that for my CPU? idgaf. anyways, now I need to
-follow the rsdp to acpi tables and discover the madt. so far I am not discovering other CPUs yet.
+follow the rsdp to acpi tables and discover the madt. so far I am not discovering other CPUs yet. the LAPIC base read 
+here is only the BSP’s current MSR value. Haven't enabled it yet or even mapped it.
+If I have to read another architecture document I'm going to cry myself to sleep.
+
+NOOO I can't directly set up a trampoline at a low physical address because I'm identity mapping that first 1 GiB
+initially but then new_tree doesn't preserve that so I'm not reading the AP data and the old page tables go away too.
+Trampoline needs a separate reservation and allocation path. Still can't give SIPI.
+
+If idt_init() constructs the shared IDT on the BSP, then having it call idt_load() at the end is nice for the BSP. 
+The issue is LIDT loads IDTR on the current logical processor. It doesn't broadcast the IDT to every CPU.
+
+I feel like shit for relying on kernel.org so much. I had to write a lot of assembly (assisted) and in my entry am
+requesting the data too before mb end.
+
+For some reason, ap_prepare_early is giving me -1. I ran qemu with -smp 2 but no dice. it's fucked. smp debugging. may
+as well say bye to a week. unless I get lucky.
+
+0xBFFE2390 is above 0x40000000 (1 GiB), so ap_acpi_table_at() rejects the XSDT before reading it. Ik that because
+I made the root table thing print the address and an error message if root==0. I'll map 4 GiB ig. K that fixed it but
+like whack a mole, a new thing showed up : it says starting cpu cores but prints no success or error message after and
+qemu just pauses.
+
+The BSP is prolly stuck in ap_wait_online(). it spins without printing. The AP isn’t reaching the code that raises
+ap_online_count
+trampoline GDT uses a 64-bit code descriptor while still entering 32 bit protected mode and its data descriptor has a
+zero limit
+
+The 10s delay is from the uncalibrated busy wait loops in the INIT/SIPI delays and AP wait. After 10s I got a success
+message saying all MADT APs are active. Nahhh the delay is too long. It's really damn long.
+
+The long delay comes from treating loop counts as time. the startup path runs ap_delay(20,000,000) plus two more 
+million-iteration delays. Their duration varies under QEMU. ap_wait_online() also has a 100 million iteration
+timeout. Replaced ap_delay with ap_delay_us. So it is using a PIT channel 2.
+
+New ap_wait_online preserves the required INIT/SIPI timing while making a failed AP start report within about a 
+second instead of appearing frozen for minutes
+the delay calls still use the old numbers, but ap_delay_us() interprets them as microseconds (maybe this is it). Yeah
+that was partly it. -smp 2 works instantly but not higher cores.
+
+The first AP changes the shared trampoline GDT at the line that writes 0x00af9a00. The second AP reuses that GDT, so 
+its protected-mode jump sees selector 0x08 as 64-bit code before long mode is enabled. That prevents the second AP 
+from starting. BAM triple fault and that is confirmed by qemu.log when I do make debug with -smp 3 -m 4G because it says
+triple fault check exception old : 0x8 new 0xd. 
+Basically the trampoline is like a mini bootloader for the APs because they can't just jump gung ho into my higher half
+C code. One AP has 0x08 as a result of its trampoline but the other(s) in protected mode see 64 bit and triple fault.
+
+Yep that was it. It is fixed now. Changed it to 0x18.

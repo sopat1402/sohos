@@ -79,16 +79,23 @@ static int map_range(uint64_t *pml4, uint64_t virt, uint64_t phys, uint64_t size
     return 1;
 }
 
-int new_tree(uint64_t kernel_phys_start, uint64_t kernel_phys_end,uint64_t kernel_virt_start, uint64_t kernel_virt_end) {
+int new_tree(uint64_t kernel_phys_start,uint64_t kernel_phys_end,uint64_t kernel_virt_start,uint64_t kernel_virt_end,uint64_t trampoline_phys,uint64_t lapic_phys){
     uint64_t kernel_phys_size = kernel_phys_end - kernel_phys_start;
     uint64_t kernel_virt_size = kernel_virt_end - kernel_virt_start;
-    if (memory_region_count() == 0 || memory_regions_highest_end() >= CANONICAL_LIMIT ||
+    if (memory_region_count() == 0 ||
+        memory_regions_highest_end() >= CANONICAL_LIMIT ||
         kernel_phys_end <= kernel_phys_start ||
         kernel_virt_end <= kernel_virt_start ||
         kernel_phys_size != kernel_virt_size ||
         kernel_virt_start < HHDM_BASE ||
         (kernel_phys_start & (PAGE_SIZE - 1)) != 0 ||
-        (kernel_virt_start & (PAGE_SIZE - 1)) != 0) {
+        (kernel_virt_start & (PAGE_SIZE - 1)) != 0 ||
+        (trampoline_phys != 0 &&
+         ((trampoline_phys & (PAGE_SIZE - 1)) != 0 ||
+          trampoline_phys >= 0x100000ull)) ||
+        (lapic_phys != 0 &&
+         ((lapic_phys & (PAGE_SIZE - 1)) != 0 ||
+          lapic_phys >= CANONICAL_LIMIT))) {
         print("Invalid page-table range\n");
         return 0;
     }
@@ -98,20 +105,26 @@ int new_tree(uint64_t kernel_phys_start, uint64_t kernel_phys_end,uint64_t kerne
         return 0;
     }
     uint64_t *pml4 = (uint64_t *)phys_to_virt(pml4_phys);
-    if (!map_range(pml4, kernel_virt_start, kernel_phys_start,
-                   kernel_virt_size, RAM_FLAGS)) {
+    if (!map_range(pml4, kernel_virt_start, kernel_phys_start,kernel_virt_size, RAM_FLAGS)) {
         print("Could not map the higher-half kernel\n");
+        return 0;
+    }
+    if (trampoline_phys != 0 && !map_4k(pml4, trampoline_phys, trampoline_phys, RAM_FLAGS)) {
+        print("Could not identity-map the AP trampoline\n");
         return 0;
     }
     for (uint32_t r = 0; r < memory_region_count(); r++) {
         const struct mem_region *region = memory_region_get(r);
-        if (!map_range(pml4, HHDM_BASE + region->base, region->base,region->end - region->base, RAM_FLAGS)) {
+        if (!map_range(pml4,HHDM_BASE + region->base,region->base,region->end - region->base,RAM_FLAGS)) {
             print("Could not build the direct map\n");
             return 0;
         }
     }
-    if (!map_4k(pml4, HHDM_BASE + VGA_ADDRESS,
-                VGA_ADDRESS, MMIO_FLAGS)) {
+    if (lapic_phys != 0 &&!map_4k(pml4,HHDM_BASE + lapic_phys,lapic_phys,MMIO_FLAGS)) {
+        print("Could not map the local APIC\n");
+        return 0;
+    }
+    if (!map_4k(pml4, HHDM_BASE + VGA_ADDRESS,VGA_ADDRESS, MMIO_FLAGS)) {
         print("Could not map VGA in the direct map\n");
         return 0;
     }

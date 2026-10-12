@@ -75,12 +75,10 @@ $(ISO): $(KERNEL) $(GRUBCFG)
 	grub-mkrescue -o $@ iso/
 
 run: $(ISO)
-	$(QEMU) -m 4G -cdrom $(ISO) -no-reboot -no-shutdown
+	$(QEMU) -m 4G -smp 4 -cdrom $(ISO) -no-reboot -no-shutdown
 
 debug: $(ISO)
-	$(QEMU) -cdrom $(ISO) -no-reboot \
-		-d int,cpu_reset \
-		-D $(BUILD_DIR)/qemu.log
+	$(QEMU) -cdrom $(ISO) -no-reboot -d int,cpu_reset -D $(BUILD_DIR)/qemu.log -m 4G -smp 3
 
 clean:
 	rm -rf $(BUILD_DIR)

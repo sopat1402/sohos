@@ -52,14 +52,6 @@ static void idt_set_gate(int vector, uint64_t handler, uint8_t ist, uint8_t type
     idt[vector].reserved=0;
 }
 
-void idt_init(void){
-    for (int i=0;i<32;i++)
-        idt_set_gate(i,isr_stub_table[i],0,GATE_INTERRUPT);
-
-    struct idt_pointer pointer={sizeof(idt)-1,(uint64_t)(uintptr_t)idt};
-    __asm__ volatile ("lidt %0" : : "m"(pointer) : "memory");
-}
-
 void exception_handler(struct interrupt_frame *frame){
     uint64_t cr2;
     __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
@@ -101,4 +93,22 @@ void exception_handler(struct interrupt_frame *frame){
 
     for (;;)
         __asm__ volatile ("cli\n\thlt");
+}
+
+static struct idt_pointer idt_ptr;
+
+void idt_load(void)
+{
+    __asm__ volatile ("lidt %0" : : "m"(idt_ptr) : "memory");
+}
+
+void idt_init(void)
+{
+    for (int i = 0; i < 32; i++)
+        idt_set_gate(i, isr_stub_table[i], 0, GATE_INTERRUPT);
+
+    idt_ptr.limit = sizeof(idt) - 1;
+    idt_ptr.base = (uint64_t)(uintptr_t)idt;
+
+    idt_load();
 }

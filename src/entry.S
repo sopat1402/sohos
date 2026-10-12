@@ -9,6 +9,12 @@ mb2_start:
     .long mb2_end - mb2_start
     .long -(0xe85250d6 + 0 + (mb2_end - mb2_start))
 
+    .short 1          /* information-request tag */
+    .short 1          /* optional */
+    .long 16
+    .long 14          /* ACPI RSDP v1 */
+    .long 15          /* ACPI RSDP v2 */
+
     .short 0
     .short 0
     .long 8
@@ -22,8 +28,17 @@ pml4:
     .skip 4096
 low_pdpt:
     .skip 4096
-low_pd:
+
+/* Four page directories: 4 x 1 GiB = 4 GiB. */
+low_pd0:
     .skip 4096
+low_pd1:
+    .skip 4096
+low_pd2:
+    .skip 4096
+low_pd3:
+    .skip 4096
+
 high_pdpt:
     .skip 4096
 high_pd:
@@ -73,25 +88,42 @@ _start:
     mov ecx, (boot_tables_end - pml4) / 4
     rep stosd
 
+    /* PML4[0] -> low identity-map PDPT. */
     mov eax, offset low_pdpt
     or eax, 3
     mov dword ptr [pml4], eax
 
-    mov eax, offset low_pd
+    /* PDPT entries 0..3 each map one GiB. */
+    mov eax, offset low_pd0
     or eax, 3
     mov dword ptr [low_pdpt], eax
 
+    mov eax, offset low_pd1
+    or eax, 3
+    mov dword ptr [low_pdpt + 8], eax
+
+    mov eax, offset low_pd2
+    or eax, 3
+    mov dword ptr [low_pdpt + 16], eax
+
+    mov eax, offset low_pd3
+    or eax, 3
+    mov dword ptr [low_pdpt + 24], eax
+
+    /* Map physical 0 through 4 GiB using 2 MiB pages. */
+    mov edi, offset low_pd0
     xor ecx, ecx
 1:
     mov eax, ecx
     shl eax, 21
     or eax, 0x83
-    mov dword ptr [low_pd + ecx*8], eax
-    mov dword ptr [low_pd + ecx*8 + 4], 0
+    mov dword ptr [edi + ecx*8], eax
+    mov dword ptr [edi + ecx*8 + 4], 0
     inc ecx
-    cmp ecx, 512
+    cmp ecx, 2048
     jne 1b
 
+    /* PML4[511] -> higher-half kernel page tables. */
     mov eax, offset high_pdpt
     or eax, 3
     mov dword ptr [pml4 + 511*8], eax
@@ -100,6 +132,7 @@ _start:
     or eax, 3
     mov dword ptr [high_pdpt + 510*8], eax
 
+    /* Map the kernel's physical image at its higher-half address. */
     mov edi, offset high_pd
     mov eax, offset __kernel_phys_start
     mov edx, offset __kernel_phys_end
