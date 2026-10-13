@@ -12,7 +12,13 @@ static uint64_t align_up(uint64_t x, uint64_t a){
 }
 
 int slab_init(slab_t *slab, slub_cache_t *cache, void *mapped_base, size_t slab_bytes) {
-    if (slab == NULL || cache == NULL || mapped_base == NULL || slab_bytes == 0 || cache->object_size == 0 || cache->alignment == 0 || (cache->alignment & (cache->alignment - 1)) != 0)
+    if (slab == NULL ||
+        cache == NULL ||
+        mapped_base == NULL ||
+        slab_bytes == 0 ||
+        cache->object_size == 0 ||
+        cache->alignment == 0 ||
+        (cache->alignment & (cache->alignment - 1)) != 0)
         return 0;
     size_t min_slot_size = sizeof(struct free_slot);
     if (cache->object_size > min_slot_size)
@@ -85,13 +91,12 @@ int slub_cache_init(slub_cache_t *cache, size_t object_size, size_t alignment, u
         return 0;
     if (slab_order > BUDDY_MAX_ORDER)
         return 0;
-    spinlock_t lock = SPINLOCK_INIT;
     cache->object_size = object_size;
     cache->alignment = alignment;
     cache->slot_size = 0;
     cache->obj_per_slab = 0;
     cache->slab_order = slab_order;
-    cache->lock = lock;
+    atomic_flag_clear(&cache->lock.flag);
     cache->slab_list = NULL;
     return 1;
 }
@@ -118,30 +123,30 @@ static slab_t *slub_grow(slub_cache_t *cache) {
 void *slub_alloc(slub_cache_t *cache) {
     if (cache == NULL)
         return NULL;
-    spin_lock(&cache->lock);
+    uint64_t flags = spin_lock_irqsave(&cache->lock);
     for (slab_t *slab = cache->slab_list; slab != NULL; slab = slab->next) {
         if (slab->free_count == 0)
             continue;
         void *object = slab_alloc(slab);
-        spin_unlock(&cache->lock);
+        spin_unlock_irqrestore(&cache->lock, flags);
         return object;
     }
     slab_t *fresh = slub_grow(cache);
     if (fresh == NULL) {
-        spin_unlock(&cache->lock);
+        spin_unlock_irqrestore(&cache->lock, flags);
         return NULL;
     }
     fresh->next = cache->slab_list;
     cache->slab_list = fresh;
     void *object = slab_alloc(fresh);
-    spin_unlock(&cache->lock);
+    spin_unlock_irqrestore(&cache->lock, flags);
     return object;
 }
 
 int slub_free(slub_cache_t *cache, void *object) {
     if (cache == NULL || object == NULL)
         return 0;
-    spin_lock(&cache->lock);
+    uint64_t flags = spin_lock_irqsave(&cache->lock);
     slab_t *prev = NULL;
     slab_t *slab = cache->slab_list;
     while (slab != NULL && !slab_contains(slab, object)) {
@@ -149,7 +154,7 @@ int slub_free(slub_cache_t *cache, void *object) {
         slab = slab->next;
     }
     if (slab == NULL || !slab_free(slab, object)) {
-        spin_unlock(&cache->lock);
+        spin_unlock_irqrestore(&cache->lock, flags);
         return 0;
     }
     int release = slab->free_count == slab->total_objects && (prev != NULL || slab->next != NULL);
@@ -160,7 +165,7 @@ int slub_free(slub_cache_t *cache, void *object) {
         else
             cache->slab_list = slab->next;
     }
-    spin_unlock(&cache->lock);
+    spin_unlock_irqrestore(&cache->lock, flags);
     if (release)
         buddy_free_order(phys, cache->slab_order);
     return 1;

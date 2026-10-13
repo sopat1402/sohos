@@ -326,10 +326,33 @@ buddy_free_order. Single-byte stores keep this safe on SMP. A zero byte means un
 which also makes large double frees harmless.
 
 tbh this is all pretty much just standard code. Most linux code has similarly shaped stuff and I just had to change the
-APIs. No need to remake the wheel ig.
+APIs. No need to reinvent the wheel ig.
 
 spinlocks need to disable interrupts, or an interrupt that allocates while the lock is held will deadlock
 single lock per cache will become a bottleneck, so per-CPU slab caches eventually ig
 
 The important thing is the spinlock interrupt deal. That's important. Must fix that. The single lock thing is just a
 temporary chokepoint that can always have a unit refactor later. no major api change or anything.
+
+I looked it up and irq is usable to fix this. So I'm replacing the spin_unlock and lock scattered all over with irq.
+spin_lock and spin_unlock became spin_lock_irqsave and spin_unlock_irqrestore. Guess it's saving context and stopping
+interrupts?
+
+irq_save: reads the CPU flags register (pushfq, then popq), then runs cli, which disables interrupts. It returns the
+    old flag
+
+irq_restore: runs sti only if the old flags had the interrupt bit (0x200) set. This is what makes nesting work. 
+    When slub holds its lock and then takes the buddy lock, interrupts are already off, so the inner restore 
+    leaves them off. Only the outer restore turns them back on.
+
+spin_lock_irqsave: saves and disables interrupts, then takes the lock. Interrupts go off first, so there’s no gap where
+    an interrupt could arrive after you hold the lock
+
+spin_unlock_irqrestore: releases the lock, then restores interrupts. The order is reversed on the way out
+
+flags travel in a local variable, which is why every exit path in buddy_alloc_order and buddy_free_order now passes 
+flags back. Each unlock must restore, or interrupts stay off after the function returns, which will fuck it all up.
+
+!! pushfq in irq_save needs the kernel built with -mno-red-zone
+
+buddy init doesn't need a lock. it runs before the cores are even brought online.

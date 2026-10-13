@@ -383,20 +383,22 @@ static void zero_block(uint64_t phys, uint8_t order) {
 uint64_t buddy_alloc_order(uint8_t order) {
     if (!ready || order > BUDDY_MAX_ORDER)
         return 0;
-    spin_lock(&buddy_lock);
+    uint64_t flags = spin_lock_irqsave(&buddy_lock);
     uint8_t found = order;
 
     while (found <= BUDDY_MAX_ORDER && !free_list_heads[found])
         found++;
 
-    if (found > BUDDY_MAX_ORDER)
+    if (found > BUDDY_MAX_ORDER) {
+        spin_unlock_irqrestore(&buddy_lock, flags);
         return 0;
+    }
 
     uint64_t phys = free_list_heads[found];
     uint64_t requested_pages = 1ull << order;
 
     if (free_pages < requested_pages || !list_remove(phys, found)) {
-        spin_unlock(&buddy_lock);
+        spin_unlock_irqrestore(&buddy_lock, flags);
         return 0;
     }
 
@@ -407,18 +409,18 @@ uint64_t buddy_alloc_order(uint8_t order) {
             phys + (BUDDY_PAGE_SIZE << found);
 
         if (!list_insert(right_phys, found)){
-            spin_unlock(&buddy_lock);
+            spin_unlock_irqrestore(&buddy_lock, flags);
             return 0;
         }
     }
 
     if (!set_page_state(phys / BUDDY_PAGE_SIZE,make_state(STATE_ALLOC_HEAD, order))) {
-        spin_unlock(&buddy_lock);
+        spin_unlock_irqrestore(&buddy_lock, flags);
         return 0;
     }
 
     free_pages -= requested_pages;
-    spin_unlock(&buddy_lock);
+    spin_unlock_irqrestore(&buddy_lock, flags);
     zero_block(phys, order);
     return phys;
 }
@@ -427,22 +429,22 @@ int buddy_free_order(uint64_t phys, uint8_t order) {
     if (!ready ||!phys ||order > BUDDY_MAX_ORDER) {
         return 0;
     }
-    spin_lock(&buddy_lock);
+    uint64_t flags = spin_lock_irqsave(&buddy_lock);
     uint32_t current_region;
     if (!region_for_block(phys, order, &current_region)){
-        spin_unlock(&buddy_lock);
+        spin_unlock_irqrestore(&buddy_lock, flags);
         return 0;
     }
     uint64_t pfn = phys / BUDDY_PAGE_SIZE;
     uint8_t state = get_page_state(pfn);
 
     if (state_kind(state) != STATE_ALLOC_HEAD || state_order(state) != order) {
-        spin_unlock(&buddy_lock);
+        spin_unlock_irqrestore(&buddy_lock, flags);
         return 0;
     }
 
     if (!set_page_state(pfn, 0)){
-        spin_unlock(&buddy_lock);
+        spin_unlock_irqrestore(&buddy_lock, flags);
         return 0;
     }
 
@@ -477,14 +479,15 @@ int buddy_free_order(uint64_t phys, uint8_t order) {
     }
 
     if (!list_insert(phys, merged_order)){
-        spin_unlock(&buddy_lock);
+        spin_unlock_irqrestore(&buddy_lock, flags);
         return 0;
     }
     free_pages += 1ull << order;
-    spin_unlock(&buddy_lock);
+    spin_unlock_irqrestore(&buddy_lock, flags);
     return 1;
 }
 
 uint64_t buddy_available_pages(void) {
     return ready ? free_pages : 0;
 }
+
