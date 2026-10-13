@@ -11,10 +11,6 @@ static uint64_t align_up(uint64_t x, uint64_t a){
     return (x+a-1)&~(a-1);
 }
 
-static uint64_t align_down(uint64_t x, uint64_t a){
-    return x&~(a-1);
-}
-
 int slab_init(slab_t *slab, slub_cache_t *cache, void *mapped_base, size_t slab_bytes) {
     if (slab == NULL || cache == NULL || mapped_base == NULL || slab_bytes == 0 || cache->object_size == 0 || cache->alignment == 0 || (cache->alignment & (cache->alignment - 1)) != 0)
         return 0;

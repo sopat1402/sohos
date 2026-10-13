@@ -312,3 +312,24 @@ cache's metadata lives inside the slab block, object size and alignment calculat
 
 Currently there is only a single spinlock per cache, which is quite a bottleneck but I'd like to have at least an MVP,
 I can always refactor this later.
+
+# kmalloc
+
+K so I kinda grouped everything into kmalloc.c, there's kfree and all that too.
+
+16..2048 in powers of two, one slub cache each, alignment equal to the class size
+Classes up to 256 use order-0 slabs, 512 and up use order-2 slabs so each slab still holds several objects after the 
+slab_t header. Anything above 2048 goes straight to buddy, rounded up to a power of 2 page count
+ page_meta holds one byte per physical frame, indexed by pfn. Slab objects write (class + 1) for the page they live in 
+at kmalloc time. Large allocations write 0x80 | order on their first page. kfree reads that byte to pick slub_free or 
+buddy_free_order. Single-byte stores keep this safe on SMP. A zero byte means unknown, and kfree ignores the pointer, 
+which also makes large double frees harmless.
+
+tbh this is all pretty much just standard code. Most linux code has similarly shaped stuff and I just had to change the
+APIs. No need to remake the wheel ig.
+
+spinlocks need to disable interrupts, or an interrupt that allocates while the lock is held will deadlock
+single lock per cache will become a bottleneck, so per-CPU slab caches eventually ig
+
+The important thing is the spinlock interrupt deal. That's important. Must fix that. The single lock thing is just a
+temporary chokepoint that can always have a unit refactor later. no major api change or anything.

@@ -7,6 +7,7 @@
 #include "../include/phys.h"
 #include "../include/buddy.h"
 #include "../include/ap_boot.h"
+#include "../include/kmalloc.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -181,4 +182,9 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
         print("All MADT APs are online\n");
     }
+    if (!kmalloc_init()) {
+        print("[error] kmalloc initialization failed\n");
+        return;
+    }
+    print("Heap initialised");
 }
