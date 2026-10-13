@@ -356,3 +356,34 @@ flags back. Each unlock must restore, or interrupts stay off after the function 
 !! pushfq in irq_save needs the kernel built with -mno-red-zone
 
 buddy init doesn't need a lock. it runs before the cores are even brought online.
+
+# Memory test
+
+327 checks, 0 failed.
+
+## spinlock 
+
+- lock state, interrupts off inside the irqsave section, nested save/restore, original interrupt state restored.
+
+## buddy
+
+- Alignment and zeroing up to order 16, with exact page accounting.
+- Rejection of wrong-order, interior-page, misaligned, double and absurd-order frees.
+- 256-page overlap stamping.
+- Coalescing after ascending, descending and shuffled frees.
+- A random mixed-order workload.
+- A full exhaustion test.
+
+## slub
+
+- The raw slab_* functions on a static buffer.
+- Five caches taken through grow, partial free, reuse and full free, checking exact slab page usage and that exactly 
+    one empty slab is kept.
+- An oversize cache that must fail without leaking a page.
+
+## kmalloc
+
+- Every size class edge, large sizes and their rounding, invalid arguments and double frees.
+- kzalloc over dirty memory and krealloc grow, shrink and into-large cases.
+- 20,000 random alloc/realloc/free operations checked by byte patterns, ending with a check that the buddy page count
+    is back at its baseline.

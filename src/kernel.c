@@ -8,6 +8,7 @@
 #include "../include/buddy.h"
 #include "../include/ap_boot.h"
 #include "../include/kmalloc.h"
+#include "../tests/mem_test.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -187,4 +188,5 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         return;
     }
     print("Heap initialised");
+    mem_test_run();
 }

@@ -29,6 +29,8 @@ static int class_for(size_t size) {
 }
 
 static int order_for(size_t size, uint8_t *order) {
+    if ((uint64_t)size > (KM_PAGE_SIZE << KM_ORDER_LIMIT))
+        return 0;
     uint64_t pages = ((uint64_t)size + KM_PAGE_SIZE - 1) / KM_PAGE_SIZE;
     uint8_t o = 0;
     while ((1ull << o) < pages) {
@@ -175,3 +177,4 @@ void *krealloc(void *ptr, size_t size) {
     kfree(ptr);
     return fresh;
 }
+
