@@ -4,7 +4,10 @@
 #include "../include/phys.h"
 #include "../include/buddy.h"
 #include "../include/idt.h"
+#include "../include/gdt.h"
 #include "../include/display.h"
+#include "../include/lapic.h"
+#include "../include/legacy.h"
 
 #define MB2_TAG_END       0u
 #define MB2_TAG_ACPI_OLD 14u
@@ -239,14 +242,7 @@ int cpu_probe_preapic(struct cpu_preapic_info *out){
 
 #define MB2_TAG_MODULE 3u
 #define MB2_TAG_MMAP   6u
-#define MB2_TAG_END    0u
 #define MB2_MMAP_AVAILABLE 1u
-
-#define IA32_APIC_BASE_MSR 0x1bu
-#define APIC_REG_TPR       0x080u
-#define APIC_REG_SVR       0x0F0u
-#define APIC_REG_ICR_LOW   0x300u
-#define APIC_REG_ICR_HIGH  0x310u
 
 struct ap_mb2_mmap_tag {
     uint32_t type;
@@ -287,7 +283,6 @@ extern uint8_t ap_trampoline_start[];
 extern uint8_t ap_trampoline_end[];
 
 static _Atomic uint32_t ap_online_count;
-static _Atomic uint64_t ap_lapic_phys;
 
 static uint32_t ap_read_u32(const uint8_t *p)
 {
@@ -638,138 +633,25 @@ int ap_prepare_early(const void *mbi,
     return 1;
 }
 
-static void ap_write_msr(uint32_t msr, uint64_t value)
-{
-    uint32_t low = (uint32_t)value;
-    uint32_t high = (uint32_t)(value >> 32);
-
-    __asm__ volatile (
-        "wrmsr"
-        :
-        : "c"(msr), "a"(low), "d"(high)
-        : "memory"
-    );
-}
-
-static int ap_enable_local_apic(void)
-{
-    uint64_t phys =
-        atomic_load_explicit(&ap_lapic_phys, memory_order_acquire);
-    uint64_t base = read_msr(IA32_APIC_BASE_MSR);
-
-    /* This first implementation uses xAPIC MMIO, not x2APIC MSRs. */
-    if ((base & (1ULL << 10)) != 0 ||
-        (base & APIC_BASE_ADDRESS_MASK) != phys)
-        return 0;
-
-    if ((base & (1ULL << 11)) == 0) {
-        base |= 1ULL << 11;
-        ap_write_msr(IA32_APIC_BASE_MSR, base);
-    }
-
-    volatile uint32_t *lapic =
-        (volatile uint32_t *)phys_to_virt(phys);
-
-    lapic[APIC_REG_TPR / 4] = 0;
-    lapic[APIC_REG_SVR / 4] = 0x100u | 0xffu;
-    return 1;
-}
-
-static int ap_lapic_send_ipi(uint32_t apic_id, uint32_t command)
-{
-    if (apic_id > 255)
-        return 0;
-
-    uint64_t phys =
-        atomic_load_explicit(&ap_lapic_phys, memory_order_acquire);
-    volatile uint32_t *lapic =
-        (volatile uint32_t *)phys_to_virt(phys);
-
-    uint32_t timeout = 1000000;
-
-    while ((lapic[APIC_REG_ICR_LOW / 4] & (1u << 12)) != 0) {
-        if (--timeout == 0)
-            return 0;
-        __asm__ volatile ("pause");
-    }
-
-    lapic[APIC_REG_ICR_HIGH / 4] = apic_id << 24;
-    lapic[APIC_REG_ICR_LOW / 4] = command;
-
-    timeout = 1000000;
-    while ((lapic[APIC_REG_ICR_LOW / 4] & (1u << 12)) != 0) {
-        if (--timeout == 0)
-            return 0;
-        __asm__ volatile ("pause");
-    }
-
-    return 1;
-}
-
-static inline uint8_t ap_inb(uint16_t port)
-{
-    uint8_t value;
-    __asm__ volatile ("inb %1, %0" : "=a"(value) : "Nd"(port));
-    return value;
-}
-
-static inline void ap_outb(uint16_t port, uint8_t value)
-{
-    __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
-}
-
-static void ap_delay_us(uint32_t usec)
-{
-    while (usec != 0) {
-        /* Keep the PIT count within its 16-bit range. */
-        uint32_t chunk = usec > 50000 ? 50000 : usec;
-        uint16_t count =
-            (uint16_t)((1193182ULL * chunk + 999999ULL) / 1000000ULL);
-
-        if (count == 0)
-            count = 1;
-
-        uint8_t old_port61 = ap_inb(0x61);
-
-        /* Gate low; disable speaker output. */
-        ap_outb(0x61, old_port61 & (uint8_t)~0x03u);
-        ap_outb(0x43, 0xB0); /* PIT channel 2, mode 0, low/high byte */
-        ap_outb(0x42, (uint8_t)(count & 0xffu));
-        ap_outb(0x42, (uint8_t)(count >> 8));
-
-        /* Gate high to start the one-shot countdown. */
-        ap_outb(0x61, (old_port61 & (uint8_t)~0x03u) | 0x01u);
-
-        while ((ap_inb(0x61) & 0x20u) == 0)
-            __asm__ volatile ("pause");
-
-        ap_outb(0x61, old_port61);
-        usec -= chunk;
-    }
-}
-
-static int ap_wait_online(uint32_t previous_count)
-{
+static int ap_wait_online(uint32_t previous_count) {
     for (uint32_t elapsed_ms = 0; elapsed_ms < 1000; elapsed_ms++) {
-        if (atomic_load_explicit(&ap_online_count,
-                                 memory_order_acquire) > previous_count)
+        if (atomic_load_explicit(&ap_online_count, memory_order_acquire) > previous_count)
             return 1;
-
-        ap_delay_us(1000);
+        pit_delay_us(1000);
     }
-
-    return atomic_load_explicit(&ap_online_count,
-                                memory_order_acquire) > previous_count;
+    return atomic_load_explicit(&ap_online_count, memory_order_acquire) > previous_count;
 }
+
 __attribute__((noreturn))
 static void ap_kernel_entry(uint32_t apic_id)
 {
     (void)apic_id;
     __asm__ volatile ("cli");
 
+    gdt_load();
     idt_load();
 
-    if (!ap_enable_local_apic()) {
+    if (!lapic_enable()) {
         for (;;)
             __asm__ volatile ("pause");
     }
@@ -777,9 +659,10 @@ static void ap_kernel_entry(uint32_t apic_id)
     atomic_fetch_add_explicit(&ap_online_count, 1,
                               memory_order_release);
 
-    /* First milestone: online, interrupts disabled, no scheduler yet. */
+    lapic_timer_start(LAPIC_TICK_HZ);
+    __asm__ volatile ("sti");
     for (;;)
-        __asm__ volatile ("pause");
+        __asm__ volatile ("hlt");
 }
 
 int ap_start_all(const struct ap_boot_plan *plan)
@@ -791,12 +674,6 @@ int ap_start_all(const struct ap_boot_plan *plan)
         plan->trampoline_phys == 0 ||
         plan->lapic_phys == 0 ||
         (plan->trampoline_phys >> 12) > 255)
-        return 0;
-
-    atomic_store_explicit(&ap_lapic_phys, plan->lapic_phys,
-                          memory_order_release);
-
-    if (!ap_enable_local_apic())
         return 0;
 
     uint64_t cr3;
@@ -838,28 +715,28 @@ int ap_start_all(const struct ap_boot_plan *plan)
                                  memory_order_acquire);
 
         /* INIT assert, delay, INIT deassert, then SIPI. */
-        if (!ap_lapic_send_ipi(target, 0x0000c500u))
+        if (!lapic_send_ipi(target, 0x0000c500u))
             return 0;
 
-        ap_delay_us(10000u);
+        pit_delay_us(10000u);
 
-        if (!ap_lapic_send_ipi(target, 0x00008500u))
+        if (!lapic_send_ipi(target, 0x00008500u))
             return 0;
 
-        ap_delay_us(200u);
+        pit_delay_us(200u);
 
         uint32_t sipi =
             0x00004600u | (uint32_t)(plan->trampoline_phys >> 12);
 
-        if (!ap_lapic_send_ipi(target, sipi))
+        if (!lapic_send_ipi(target, sipi))
             return 0;
 
-        ap_delay_us(200u);
+        pit_delay_us(200u);
 
         /* Send the customary second SIPI if the first did not bring it online. */
         if (atomic_load_explicit(&ap_online_count,
                                  memory_order_acquire) == previous) {
-            if (!ap_lapic_send_ipi(target, sipi))
+            if (!lapic_send_ipi(target, sipi))
                 return 0;
         }
 
@@ -869,3 +746,4 @@ int ap_start_all(const struct ap_boot_plan *plan)
 
     return 1;
 }
+

@@ -387,3 +387,83 @@ buddy init doesn't need a lock. it runs before the cores are even brought online
 - kzalloc over dirty memory and krealloc grow, shrink and into-large cases.
 - 20,000 random alloc/realloc/free operations checked by byte patterns, ending with a check that the buddy page count
     is back at its baseline.
+
+# LAPIC and per CPU data
+
+PIC is just for one cpu so it has to be mapped to 0x20 and up (vectors 32+, see IDT) and masked because I need per CPU
+data.
+
+Local APIC (LAPIC): one per core. It handles that core’s own timer, inter-processor interrupts (IPIs), and acknowledging
+    interrupts. It’s controlled through memory-mapped registers at a physical address (0xFEE00000 by default, and ACPI’s
+    MADT gives it to us). Every core uses the same address but sees its own LAPIC
+
+MADT parsing: the LAPIC physical address (with the override entry) and the AP list.
+LAPIC enable: ap_enable_local_apic sets the enable bit and the spurious vector to 0xFF, with TPR at 0, on the BSP and on
+    each AP.
+A calibration reference: ap_delay_us is a PIT channel 2 one-shot that is polled through port 0x61. That’s exactly the 
+    clock I need to calibrate the LAPIC timer, so it just needs to move out of ap_boot.c and become public.
+
+This stuff is already done.
+
+Right now the IDT only knows about the 32 CPU exceptions, and every one of them ends in a handler that prints the 
+register dump and halts. That’s right for faults, but a timer tick is the opposite. the CPU should run a short handler 
+and then go back to whatever it was doing. So this must make it tell those 2 apart.
+
+## ISR and IDT change for more stubs for vector 32+
+
+CPU looks up IDT[N], pushes SS, RSP, RFLAGS, CS, RIP + error code for exceptions, clears IF, and jumps to the gate’s 
+address. The LAPIC brings up N.
+
+I'm adding 224 more stubs for vectors 32 to 255, in the same 16-byte-spaced layout, so C can compute a stub’s address 
+instead of needing 224 named symbols like for those 32. interrupt_dispatch, the single C entry point, replacing 
+exception_handler as the target of isr_common -> that unfortunately means having to deal with GAS assembly again 🤮.
+
+irq_register(vector, handler), so the timer code can later say vector 0x40 is mine.
+A gap for vector 0xFF (the spurious vector already programmed into the LAPIC) with no handler registered it 
+just returns, and it must not send an EOI. This stuff will be hard to add tbh.
+
+So the interrupt frame struct is going out of idt.c and into idt.h so that functions outside can include it and take
+it as a parameter. interrupt dispatch is handling the vectors 32 to 255. exception handler is for below 32. Those 32 
+exception names are now in a vector. isr stub is marked and now it calls interrupt_dispatch.
+
+- Printing from handlers: it works, but display_set_cursor and print aren’t locked, so two cores printing at once will interleave. Fine for debugging, not for anything permanent.
+- Stack switching for later: all interrupts currently run on whatever stack was active. That’s fine for kernel-only code.
+    When i add user mode, you’ll need a TSS rsp0 so an interrupt from ring 3 lands on a kernel stack. The IST field on 
+    each gate (still 0) is also where the double fault stack goes.
+- The AP entry: ap_kernel_entry already calls idt_load(), so the APs pick up the new gates automatically
+
+so, this is calculating an interrupt address but I don't want the rest of my functions to have to worry about poking
+raw addresses. that's why I'll wrap them in lapic.c
+
+## lapic.c
+
+it will read and write registers, ap_enable_local_apic moves here to enable lapic. also on EOI (end of interrupt),
+0 is written to the register to say the handler is done and to accept a new one. if this isn't done lapic will assume
+it is busy and not send another. it also needs a countdown timer before firing a vector. it'll be given a number and a
+vector. but omfg the timer must be calibrated first because it has to sync with the hardware clock. must use PIT to count
+10ms and then count ticks per millisecond. ap_lapic_send_ipi will come in here.
+
+Other functions should not know the EOI registers and register offsets and MMIO.
+
+Without a timer interrupt, a thread runs until it chooses to give up the CPU. With one, the kernel gets control back 
+every few milliseconds whether the thread wants it or not, and it can switch to another thread. Ik the value of 
+interrupts because I wrote an async runtime in C and it was cooperative :(
+
+The lapic timer vector is 0x40. So, lapic.c is just EOI + timer + calibration plus the code moved from ap_boot.c legacy
+is just for pit delay and disable. have used pit delay in ap boot, it was the reason my boot was taking long because
+delay_us was taking microseconds but i gave a much bigger number. pit_delay_us is literally just ap_delay_us
+
+pic_disable remaps the two legacy 8259 controllers to vectors 0x20 to 0x2F and then masks every line
+The remap matters even though everything is masked bc a spurious PIC interrupt would otherwise arrive on vectors 8 to 15,
+which are CPU exception vectors. should be called on bsp before first sti.
+
+establish the IDT first, then disable the legacy PIC so it stops delivering its legacy IRQs. I'm moving to APIC based
+handling.
+
+check_exception old: 0x8 new 0xe
+Triple fault
+
+ugh got this as a triple fault when I try to get the BSP to disable interrupts and start its timer. Exception 8 was the
+error (double fault) but exception 14 made the cpu give up. qemu log says it's around a gdt address so ig. cs is loaded
+from gdt so first tick after sti panics. GDT load now calls CS with a high return. gdt.c leaves fs and gs alone because
+the cpu pointer goes into gs.

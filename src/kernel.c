@@ -8,7 +8,9 @@
 #include "../include/buddy.h"
 #include "../include/ap_boot.h"
 #include "../include/kmalloc.h"
-#include "../tests/mem_test.h"
+#include "../include/legacy.h"
+#include "../include/lapic.h"
+#include "../include/gdt.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -26,6 +28,7 @@ static struct ap_boot_plan ap_plan;
 static int ap_plan_ready;
 void kmain(uint32_t magic, uint64_t multiboot_data) {
     idt_init();
+    pic_disable();
     print("Welcome to SOHOS!\n");
     if (magic != 0x36d76289) {
         print("[error] Invalid Multiboot magic\n");
@@ -164,16 +167,29 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
     bitmap_init(bitmap_region.base, bitmap_region.end - bitmap_region.base);
     mark_free_memory(image_phys_start, image_phys_end, info_start, info_end);
-
-    if (!new_tree(kernel_phys_start,kernel_phys_end,kernel_virt_start,kernel_virt_end,ap_plan_ready ? ap_plan.trampoline_phys : 0,ap_plan_ready ? ap_plan.lapic_phys : 0)) {
+    uint64_t lapic_map_phys = ap_plan_ready ? ap_plan.lapic_phys : (bsp_cpu.has_apic ? bsp_cpu.lapic_phys_base : 0);
+    if (!new_tree(kernel_phys_start, kernel_phys_end, kernel_virt_start, kernel_virt_end, ap_plan_ready ? ap_plan.trampoline_phys : 0, lapic_map_phys)) {
         print("[error] Page-table setup failed\n");
         return;
     }
+    gdt_load();
     if (!buddy_init(bitmap_region.base,bitmap_region.end - bitmap_region.base)) {
         print("[error] Buddy allocator initialization failed\n");
         return;
     }
-
+    if (!lapic_init(lapic_map_phys) || !lapic_enable()) {
+        print("[error] Local APIC setup failed\n");
+        return;
+    }
+    lapic_enable();
+    if (!lapic_timer_calibrate()) {
+        print("[error] LAPIC timer calibration failed\n");
+        return;
+    }
+    if (!lapic_timer_install()) {
+        print("[error] LAPIC timer handler install failed\n");
+        return;
+    }
     print("Starting available CPU cores...\n");
     if (ap_plan_ready) {
         if (!ap_start_all(&ap_plan)) {
@@ -187,6 +203,23 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("[error] kmalloc initialization failed\n");
         return;
     }
-    print("Heap initialised");
-    mem_test_run();
+    if (!lapic_timer_start(LAPIC_TICK_HZ)) {
+        print("[error] BSP timer start failed\n");
+        return;
+    }
+    uint64_t before[AP_BOOT_MAX_APS];
+    uint64_t bsp_before = lapic_timer_ticks(bsp_cpu.bsp_apic_id);
+    for (uint32_t i = 0; ap_plan_ready && i < ap_plan.ap_count; i++)
+        before[i] = lapic_timer_ticks(ap_plan.apic_ids[i]);
+    __asm__ volatile ("sti");
+    pit_delay_us(1000000u);
+    print("Ticks in 1s, BSP: ");
+    print_uint(lapic_timer_ticks(bsp_cpu.bsp_apic_id) - bsp_before);
+    for (uint32_t i = 0; ap_plan_ready && i < ap_plan.ap_count; i++) {
+        print(" AP");
+        print_uint(ap_plan.apic_ids[i]);
+        print(": ");
+        print_uint(lapic_timer_ticks(ap_plan.apic_ids[i]) - before[i]);
+    }
+    print("\n");
 }

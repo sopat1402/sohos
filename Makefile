@@ -78,7 +78,7 @@ run: $(ISO)
 	$(QEMU) -m 4G -smp 4 -cdrom $(ISO) -no-reboot -no-shutdown
 
 debug: $(ISO)
-	$(QEMU) -cdrom $(ISO) -no-reboot -d int,cpu_reset -D $(BUILD_DIR)/qemu.log -m 4G -smp 3
+	$(QEMU) -cdrom $(ISO) -no-reboot -d int,cpu_reset -D $(BUILD_DIR)/qemu.log -m 4G -smp 1
 
 clean:
 	rm -rf $(BUILD_DIR)

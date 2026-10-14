@@ -1,12 +1,12 @@
 .intel_syntax noprefix
 .code64
-
+ 
 .pushsection .rodata.isr_table, "a"
 .align 8
 .global isr_stub_table
 isr_stub_table:
 .popsection
-
+ 
 .macro ISR_NOERR num
     .pushsection .text
     .align 16
@@ -19,7 +19,7 @@ isr_stub_\num:
     .quad isr_stub_\num
     .popsection
 .endm
-
+ 
 .macro ISR_ERR num
     .pushsection .text
     .align 16
@@ -31,7 +31,7 @@ isr_stub_\num:
     .quad isr_stub_\num
     .popsection
 .endm
-
+ 
 ISR_NOERR 0
 ISR_NOERR 1
 ISR_NOERR 2
@@ -64,7 +64,7 @@ ISR_NOERR 28
 ISR_ERR 29
 ISR_ERR 30
 ISR_NOERR 31
-
+ 
 .section .text
 isr_common:
     push rax
@@ -82,14 +82,14 @@ isr_common:
     push r13
     push r14
     push r15
-
+ 
     cld
     mov rdi, rsp
     mov rbp, rsp
     and rsp, -16
-    call exception_handler
+    call interrupt_dispatch
     mov rsp, rbp
-
+ 
     pop r15
     pop r14
     pop r13
@@ -107,3 +107,16 @@ isr_common:
     pop rax
     add rsp, 16
     iretq
+ 
+.balign 16
+.global irq_stub_base
+irq_stub_base:
+.set irq_vec, 32
+.rept 224
+.balign 16
+    .byte 0x6a, 0x00
+    .byte 0x68
+    .long irq_vec
+    jmp isr_common
+    .set irq_vec, irq_vec + 1
+.endr
