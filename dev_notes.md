@@ -466,4 +466,26 @@ Triple fault
 ugh got this as a triple fault when I try to get the BSP to disable interrupts and start its timer. Exception 8 was the
 error (double fault) but exception 14 made the cpu give up. qemu log says it's around a gdt address so ig. cs is loaded
 from gdt so first tick after sti panics. GDT load now calls CS with a high return. gdt.c leaves fs and gs alone because
-the cpu pointer goes into gs.
+the cpu pointer goes into gs. worked and it passes mem_test too
+
+## per CPU data
+
+One struct percpu per core, allocated once at boot. Every core needs a cheap way to find its own struct from any code, 
+including interrupt handlers.
+
+x86-64 has a segment register, GS, whose base address can be set per core through a model-specific register 
+(IA32_GS_BASE, MSR 0xC0000101). Each core has its own copy of that MSR. so, each cpu can set its gs base to its 
+struct percpu and its first field is a pointer to itself. so, mov %gs:0, reg reads the address and returns it. that's
+what percpu_self() does. no lock or anything needed. gives the struct addr just like that.
+the struct has cpu id, apic id and tick count, which replaces the temp array in lapic.c
+
+If the BSP’s percpu_attach comes after the timer starts, the first tick reads gs:0 with a zero base, which is a page 
+fault at address 0
+
+one 64 byte aligned struct per core. The BSP is cpu_id 0 and the APs follow in boot plan order. percpu_attach(apic_id) 
+writes the matching struct address to IA32_GS_BASE.
+tick handler now increments the running core’s own counter. The temporary array is gone, and lapic_timer_ticks looks a 
+core up by APIC ID, so the print loop works unchanged.each AP calls percpu_attach(lapic_id()) after its LAPIC is enabled
+and before it counts itself online.
+
+heap init is moved earlier because the structs need to be allocated.

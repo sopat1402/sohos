@@ -11,6 +11,7 @@
 #include "../include/legacy.h"
 #include "../include/lapic.h"
 #include "../include/gdt.h"
+#include "../include/percpu.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -177,6 +178,10 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("[error] Buddy allocator initialization failed\n");
         return;
     }
+    if (!kmalloc_init()) {
+        print("[error] kmalloc initialization failed\n");
+        return;
+    }
     if (!lapic_init(lapic_map_phys) || !lapic_enable()) {
         print("[error] Local APIC setup failed\n");
         return;
@@ -190,6 +195,14 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("[error] LAPIC timer handler install failed\n");
         return;
     }
+    if (!percpu_init(bsp_cpu.bsp_apic_id, ap_plan_ready ? ap_plan.apic_ids : 0, ap_plan_ready ? ap_plan.ap_count : 0)) {
+        print("[error] per-CPU setup failed\n");
+        return;
+    }
+    if (!percpu_attach(bsp_cpu.bsp_apic_id)) {
+        print("[error] BSP per-CPU attach failed\n");
+        return;
+    }
     print("Starting available CPU cores...\n");
     if (ap_plan_ready) {
         if (!ap_start_all(&ap_plan)) {
@@ -198,10 +211,6 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         }
 
         print("All MADT APs are online\n");
-    }
-    if (!kmalloc_init()) {
-        print("[error] kmalloc initialization failed\n");
-        return;
     }
     if (!lapic_timer_start(LAPIC_TICK_HZ)) {
         print("[error] BSP timer start failed\n");

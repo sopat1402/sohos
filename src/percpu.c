@@ -1,0 +1,64 @@
+#include <stdint.h>
+#include "../include/percpu.h"
+#include "../include/kmalloc.h"
+
+static struct percpu *cpus;
+static uint32_t cpu_total;
+
+static void percpu_wrmsr(uint32_t msr, uint64_t value) {
+    uint32_t low = (uint32_t)value;
+    uint32_t high = (uint32_t)(value >> 32);
+    __asm__ volatile ("wrmsr" : : "c"(msr), "a"(low), "d"(high) : "memory");
+}
+
+int percpu_init(uint32_t bsp_apic_id, const uint32_t *ap_apic_ids, uint32_t ap_count) {
+    if (cpus != 0 || (ap_count != 0 && ap_apic_ids == 0))
+        return 0;
+    uint32_t total = ap_count + 1;
+    struct percpu *array = (struct percpu *)kzalloc((size_t)total * sizeof(struct percpu));
+    if (array == 0)
+        return 0;
+    if (((uintptr_t)array & 63u) != 0) {
+        kfree(array);
+        return 0;
+    }
+    for (uint32_t i = 0; i < total; i++) {
+        array[i].self = &array[i];
+        array[i].cpu_id = i;
+        array[i].apic_id = i == 0 ? bsp_apic_id : ap_apic_ids[i - 1];
+    }
+    cpu_total = total;
+    __atomic_store_n(&cpus, array, __ATOMIC_RELEASE);
+    return 1;
+}
+
+struct percpu *percpu_by_apic_id(uint32_t apic_id) {
+    struct percpu *array = __atomic_load_n(&cpus, __ATOMIC_ACQUIRE);
+    if (array == 0)
+        return 0;
+    for (uint32_t i = 0; i < cpu_total; i++) {
+        if (array[i].apic_id == apic_id)
+            return &array[i];
+    }
+    return 0;
+}
+
+struct percpu *percpu_by_cpu_id(uint32_t cpu_id) {
+    struct percpu *array = __atomic_load_n(&cpus, __ATOMIC_ACQUIRE);
+    if (array == 0 || cpu_id >= cpu_total)
+        return 0;
+    return &array[cpu_id];
+}
+
+uint32_t percpu_count(void) {
+    return __atomic_load_n(&cpus, __ATOMIC_ACQUIRE) ? cpu_total : 0;
+}
+
+int percpu_attach(uint32_t apic_id) {
+    struct percpu *p = percpu_by_apic_id(apic_id);
+    if (p == 0)
+        return 0;
+    percpu_wrmsr(IA32_GS_BASE_MSR, (uint64_t)(uintptr_t)p);
+    return 1;
+}
+

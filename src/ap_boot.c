@@ -5,6 +5,7 @@
 #include "../include/buddy.h"
 #include "../include/idt.h"
 #include "../include/gdt.h"
+#include "../include/percpu.h"
 #include "../include/display.h"
 #include "../include/lapic.h"
 #include "../include/legacy.h"
@@ -652,6 +653,11 @@ static void ap_kernel_entry(uint32_t apic_id)
     idt_load();
 
     if (!lapic_enable()) {
+        for (;;)
+            __asm__ volatile ("pause");
+    }
+
+    if (!percpu_attach(lapic_id())) {
         for (;;)
             __asm__ volatile ("pause");
     }
