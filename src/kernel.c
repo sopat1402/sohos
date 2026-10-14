@@ -29,13 +29,6 @@ static struct cpu_preapic_info bsp_cpu;
 static struct ap_boot_plan ap_plan;
 static int ap_plan_ready;
 
-static void counter_thread(void *arg) {
-    volatile uint64_t *counter = arg;
-    for (;;) {
-        (*counter)++;
-    }
-}
-
 void kmain(uint32_t magic, uint64_t multiboot_data) {
     idt_init();
     pic_disable();
@@ -241,12 +234,5 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("[error] BSP timer start failed\n");
         return;
     }
-    volatile uint64_t counter1=0;
-    volatile uint64_t counter2=0;
-    volatile uint64_t counter3=0;
-    struct thread *t1=thread_create("t1",counter_thread,(void*)&counter1);
-    struct thread *t2=thread_create("t2",counter_thread,(void*)&counter2);
-    struct thread *t3=thread_create("t3",counter_thread,(void*)&counter3);
-    sched_idle_loop();
 }
 
