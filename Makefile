@@ -8,6 +8,7 @@ ISO = $(BUILD_DIR)/sohos.iso
 GRUBCFG = iso/boot/grub/grub.cfg
 
 CFLAGS = \
+	-g \
 	-std=gnu11 \
 	-ffreestanding \
 	-O2 \
@@ -78,7 +79,12 @@ run: $(ISO)
 	$(QEMU) -m 4G -smp 4 -cdrom $(ISO) -no-reboot -no-shutdown
 
 debug: $(ISO)
-	$(QEMU) -cdrom $(ISO) -no-reboot -d int,cpu_reset -D $(BUILD_DIR)/qemu.log -m 4G -smp 1
+	$(QEMU) -m 4G -smp 4 -cdrom $(ISO) -no-reboot -no-shutdown \
+		-s -d int,cpu_reset -D $(BUILD_DIR)/qemu.log
+
+gdb: $(KERNEL)
+	gdb $(KERNEL) \
+		-ex 'target remote :1234'
 
 clean:
 	rm -rf $(BUILD_DIR)

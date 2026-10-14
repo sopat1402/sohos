@@ -6,6 +6,7 @@
 #include "../include/idt.h"
 #include "../include/gdt.h"
 #include "../include/percpu.h"
+#include "../include/sched.h"
 #include "../include/display.h"
 #include "../include/lapic.h"
 #include "../include/legacy.h"
@@ -662,13 +663,18 @@ static void ap_kernel_entry(uint32_t apic_id)
             __asm__ volatile ("pause");
     }
 
-    atomic_fetch_add_explicit(&ap_online_count, 1,
-                              memory_order_release);
+    if (!sched_adopt_boot_thread()) {
+        for (;;)
+            __asm__ volatile ("pause");
+    }
 
-    lapic_timer_start(LAPIC_TICK_HZ);
-    __asm__ volatile ("sti");
-    for (;;)
-        __asm__ volatile ("hlt");
+    if (!lapic_timer_start(LAPIC_TICK_HZ)) {
+        for (;;)
+            __asm__ volatile ("cli\n\thlt");
+    }
+
+    atomic_fetch_add_explicit(&ap_online_count, 1, memory_order_release);
+    sched_idle_loop();
 }
 
 int ap_start_all(const struct ap_boot_plan *plan)
@@ -752,4 +758,3 @@ int ap_start_all(const struct ap_boot_plan *plan)
 
     return 1;
 }
-

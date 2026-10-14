@@ -12,6 +12,7 @@
 #include "../include/lapic.h"
 #include "../include/gdt.h"
 #include "../include/percpu.h"
+#include "../include/sched.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -27,6 +28,14 @@ static uint8_t boot_rsdp_revision;
 static struct cpu_preapic_info bsp_cpu;
 static struct ap_boot_plan ap_plan;
 static int ap_plan_ready;
+
+static void counter_thread(void *arg) {
+    volatile uint64_t *counter = arg;
+    for (;;) {
+        (*counter)++;
+    }
+}
+
 void kmain(uint32_t magic, uint64_t multiboot_data) {
     idt_init();
     pic_disable();
@@ -168,20 +177,24 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
     bitmap_init(bitmap_region.base, bitmap_region.end - bitmap_region.base);
     mark_free_memory(image_phys_start, image_phys_end, info_start, info_end);
+
     uint64_t lapic_map_phys = ap_plan_ready ? ap_plan.lapic_phys : (bsp_cpu.has_apic ? bsp_cpu.lapic_phys_base : 0);
     if (!new_tree(kernel_phys_start, kernel_phys_end, kernel_virt_start, kernel_virt_end, ap_plan_ready ? ap_plan.trampoline_phys : 0, lapic_map_phys)) {
         print("[error] Page-table setup failed\n");
         return;
     }
     gdt_load();
+
     if (!buddy_init(bitmap_region.base,bitmap_region.end - bitmap_region.base)) {
         print("[error] Buddy allocator initialization failed\n");
         return;
     }
+
     if (!kmalloc_init()) {
         print("[error] kmalloc initialization failed\n");
         return;
     }
+
     if (!lapic_init(lapic_map_phys) || !lapic_enable()) {
         print("[error] Local APIC setup failed\n");
         return;
@@ -195,6 +208,7 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("[error] LAPIC timer handler install failed\n");
         return;
     }
+
     if (!percpu_init(bsp_cpu.bsp_apic_id, ap_plan_ready ? ap_plan.apic_ids : 0, ap_plan_ready ? ap_plan.ap_count : 0)) {
         print("[error] per-CPU setup failed\n");
         return;
@@ -203,6 +217,17 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("[error] BSP per-CPU attach failed\n");
         return;
     }
+
+    if (!sched_init()) {
+        print("[error] Failed to initialise scheduler");
+        return;
+    }
+
+    if (!sched_adopt_boot_thread()) {
+        print("[error] Failed to adopt thread on BSP");
+        return;
+    }
+
     print("Starting available CPU cores...\n");
     if (ap_plan_ready) {
         if (!ap_start_all(&ap_plan)) {
@@ -216,19 +241,12 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("[error] BSP timer start failed\n");
         return;
     }
-    uint64_t before[AP_BOOT_MAX_APS];
-    uint64_t bsp_before = lapic_timer_ticks(bsp_cpu.bsp_apic_id);
-    for (uint32_t i = 0; ap_plan_ready && i < ap_plan.ap_count; i++)
-        before[i] = lapic_timer_ticks(ap_plan.apic_ids[i]);
-    __asm__ volatile ("sti");
-    pit_delay_us(1000000u);
-    print("Ticks in 1s, BSP: ");
-    print_uint(lapic_timer_ticks(bsp_cpu.bsp_apic_id) - bsp_before);
-    for (uint32_t i = 0; ap_plan_ready && i < ap_plan.ap_count; i++) {
-        print(" AP");
-        print_uint(ap_plan.apic_ids[i]);
-        print(": ");
-        print_uint(lapic_timer_ticks(ap_plan.apic_ids[i]) - before[i]);
-    }
-    print("\n");
+    volatile uint64_t counter1=0;
+    volatile uint64_t counter2=0;
+    volatile uint64_t counter3=0;
+    struct thread *t1=thread_create("t1",counter_thread,(void*)&counter1);
+    struct thread *t2=thread_create("t2",counter_thread,(void*)&counter2);
+    struct thread *t3=thread_create("t3",counter_thread,(void*)&counter3);
+    sched_idle_loop();
 }
+

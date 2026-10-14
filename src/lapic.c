@@ -34,6 +34,7 @@ static volatile uint32_t *lapic_regs;
 static uint64_t lapic_phys_base;
 static uint32_t timer_ticks_per_ms;
 static int timer_installed;
+static void (*tick_hook)(void);
 
 static uint64_t lapic_rdmsr(uint32_t msr) {
     uint32_t low;
@@ -134,6 +135,13 @@ static void lapic_timer_handler(struct interrupt_frame *frame) {
     (void)frame;
     __atomic_fetch_add(&percpu_self()->ticks, 1, __ATOMIC_RELAXED);
     lapic_eoi();
+    void (*hook)(void) = __atomic_load_n(&tick_hook, __ATOMIC_ACQUIRE);
+    if (hook)
+        hook();
+}
+
+void lapic_set_tick_hook(void (*hook)(void)) {
+    __atomic_store_n(&tick_hook, hook, __ATOMIC_RELEASE);
 }
 
 int lapic_timer_install(void) {
@@ -164,3 +172,4 @@ uint64_t lapic_timer_ticks(uint32_t apic_id) {
         return 0;
     return __atomic_load_n(&p->ticks, __ATOMIC_RELAXED);
 }
+

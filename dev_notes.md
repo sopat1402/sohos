@@ -489,3 +489,84 @@ core up by APIC ID, so the print loop works unchanged.each AP calls percpu_attac
 and before it counts itself online.
 
 heap init is moved earlier because the structs need to be allocated.
+
+# Threads and scheduling
+
+So, a thread is just a saved execution state and the memory it needs to resume. register state + stack + bookkeeping
+
+until user mode, x87/SSE/AV state is not touched as it is booted with general regs only as of now.
+
+- The general-purpose registers.
+- The instruction pointer (rip) and stack pointer (rsp).
+- rflags.
+- The segment registers, which are constant for kernel threads (ignored for now).
+- CR3, if the address space differs.
+- FS and GS bases, if threads have thread-local storage
+
+Context switching isn't too hard because when I wrote my async runtime, I first made it stackful and then stackless.
+whichever one needs registers saved.
+
+if a thread calls schedule, SYSTEM VABI says it is supposed to know that rax,rax,rdx,r8-r11,rsi,rdi are destroyed.
+callee saved things must be saved : rbx, rbp, r12, r13, r14, r15, plus rsp. Call already pushed return address to the
+stack. (cooperative)
+A new thread that has never run anything has no context so spoof it and make it look like a thread that was switched out
+clever stuff rlly (stack must be alloced too).
+
+for a first version, thread control block is just one struct per thread.
+
+If the handler calls schedule() before the EOI, and the switch goes to a thread that doesn’t return to this core’s 
+handler for a long time, the LAPIC never gets its EOI and no more timer ticks arrive on that core. so, EOI should be
+sent before schedule.
+
+a trampoline is needed (waahhh again) in the context switch. it needs to enable interrupts, release any scheduler lock,
+move r13 into rdi and call r12, call thread_exit when the function returns.
+
+spinlocks are not enough. need a wait queue for mutexes and symaphores.
+initially new threads go to the least loaded core, and an idle core steals if it finds its own queue empty. affinity
+(locking thread to core) can be added later.
+
+Round robin scheduling first. Everything above builds on the same switch and queue machinery. Plan is CFS style red
+black tree and a vruntime for each.
+
+The scheduler: one run queue per core, round robin, preemptive.
+Run queue: an intrusive FIFO list guarded by a per-queue spinlock that is only ever taken with interrupts off.
+No code holds two run queue locks at once, so there is no lock ordering to get wrong. Threads are bound to the core
+they are first enqueued on, so only that core ever picks them. There is no migration or stealing yet.
+schedule(): disables interrupts, puts the running thread at the tail if it is still runnable (the idle thread is never
+queued), pops the head or falls back to the core's idle thread, and switches. If the pick is the same thread it just
+refreshes its slice and returns. The queue lock is dropped before switch_to. The thread that resumes runs
+sched_finish_switch for the thread it replaced, which clears that thread's on_cpu flag and frees it if it was a
+zombie. A new thread runs the same step from thread_trampoline. Because the finish step runs only after the old
+stack has been left, a zombie's stack is never freed while in use.
+sched_tick runs from the timer handler after the EOI, so the switch it triggers cannot block further ticks. It
+counts the running thread's slice down and calls schedule when the slice is gone and something else is ready,
+or when the core is idle and work has arrived.
+Idle: every core's boot context is adopted by sched_adopt_boot_thread as that core's idle thread. The idle loop
+checks the queue with interrupts off and then uses sti followed directly by hlt. sti takes effect after the next
+instruction, so an interrupt cannot slip in between and leave the core halted with work waiting.
+Wakeups across cores: sched_enqueue on another core sends it SCHED_IPI_VECTOR, whose handler reschedules only if the
+target is idle with work waiting.
+Placement: sched_pick_cpu picks the online core with the smallest ready count plus one if it is running a non-idle
+thread, starting from a rotating cursor so ties spread out.
+no percpu pointer across anything that can reschedule once threads can migrate. schedule() and sched_tick keep theirs 
+only because nothing migrates yet.
+
+To integrate, I should init the scheduler before ap_start and save the CPUs boot context as its idle thread.
+
+ap_kernel_entry is already adopting the thread.
+
+thread_create(name, fn, arg) chooses a CPU and enqueues the thread.
+thread_create_on(name, fn, arg, cpu) lets you choose a particular CPU.
+sched_idle_loop() lets the BSP idle while waiting for work
+
+thread_fn is a function that returns void and takes a void* arg.
+
+it passes the thread_create. 3 threads made. Made 3 counters and a function to increment. Had to keep as volatile else
+gcc optimises them out and i can't see them in gdb. make debug now makes a server that gdb links to with make gdb.
+
+CPU	    Before	        After 10 s	    Increase
+CPU0	452,511,099	    1,459,045,789	+1,006,534,690
+CPU1	416,862,633	    1,726,237,751	+1,309,375,118
+CPU2	545,354,577	    1,278,932,723	+733,578,146
+
+the threads are therefore, doing their work.
