@@ -624,6 +624,8 @@ Local invalidation only.
 
 so, it returns out_phys but doesn't free it.
 
+!! vm_map allocs the page on its own and maps 1 4 KiB page per call.
+
 # TLB
 
 already have vm_invlpg, can flush for one specific page.
@@ -645,3 +647,41 @@ a shitty little doubly linked list and hash map. Here it's not enough to change 
 and make the tlb cache of the cpu itself clear.
 
 I added tickets and interrupts should be kept on by the waiters.
+
+# vmalloc
+
+kernel image starts at 0xFFFFFFFF80000000, while the HHDM starts at 0xFFFF800000000000. I need to find a place to put
+my vmalloc region. after that I need a vmalloc allocator and then it's straightforward. Just round up the bytes requested
+to pages and alloc the pages and map them.
+
+vmalloc	0xFFFFC00000000000 – 0xFFFFC10000000000 gives a 1 TiB virtual address window. Also aligned to pml4 boundaries.
+
+I made a struct for an alloctor and a linked link for mem regions. Not considering fragmentation yet.
+
+ugh need to use kmalloc in vmalloc for a linked list it's a linked list so it needs a heap. fuck me. my memory allocator
+depends on my memory allocator.
+
+I'm currently using the cr3 as the root phys given to vm_map in vmalloc.
+
+If kmalloc() fails during rollback, ts leaks the virtual reservation. A proper implementation should preserve a 
+reservation descriptor so rollback never depends on a fresh allocation. rollback is on failure btw. The tlb global
+broadcast and total flush is just painful ATP. but it can be optimised later. it is functional rn.
+
+and if their base+size is not on a page boundary but there's actual data after? suppose they alloc 4094, rounded to 
+4096 but free 4090 but have an aligned base. 4 bytes get fucked. fuck. so it's not enough for aligned base and size.
+I must therefore have allocation metadata so that I can just do vfree(ptr) and let it check the data and figure it tf
+out.
+
+cr3 is used because I don't have address spaces yet 😭 also there's a chance my rollback loses track of mapped pages.
+buddy_free_order error is potentially ignored too. free_space is also not checked yet. just trusted merging.
+
+vfree gives 0 on success, -1 on failure. key part here is, I'm using the metadata's size from the base that the caller
+gives.
+
+I added a quarantine list to the rollback process. TBH at this point even if there is an unclaimed page bug idgaf. I can
+debug it later. It is strapped to the teeth with methods (at least as far as I care to do rn) for rollbacks.
+
+I just hope I don't end up with a dependency loop where kmalloc tries to use vmalloc eventually but vmalloc uses kmalloc.
+
+btw I'm not testing rn but a caller need to ensure that vmalloc_init has been called else the allocator head will not
+point to the initial struct.
