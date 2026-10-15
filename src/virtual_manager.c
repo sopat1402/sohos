@@ -3,6 +3,7 @@
 #include "../include/phys.h"
 #include "../include/spinlock.h"
 #include "../include/buddy.h"
+#include "../include/tlb.h"
 
 static spinlock_t map_lock = SPINLOCK_INIT;
 
@@ -446,11 +447,9 @@ enum vm_map_status vm_map(uint64_t root_phys, uintptr_t virt_addr, uint64_t flag
 
     *out_phys = data_phys;
 
-    if ((read_cr3() & PTE_ADDR_MASK) == root_phys)
-        vm_invlpg(virt_addr);
 
     spin_unlock_irqrestore(&map_lock, lock_flags);
-
+    tlb_shootdown();
     for (uint8_t i = needed_now; i < allocated_tables; i++)
         (void)buddy_free_order(new_tables[i], 0);
 
@@ -569,10 +568,9 @@ enum vm_unmap_status vm_unmap(uint64_t root_phys, uintptr_t virt_addr, uint64_t 
 
     *out_phys = old_entry & PTE_ADDR_MASK;
 
-    if ((read_cr3() & PTE_ADDR_MASK) == root_phys)
-        vm_invlpg(virt_addr);
 
 done:
     spin_unlock_irqrestore(&map_lock, lock_flags);
+    tlb_shootdown();
     return status;
 }

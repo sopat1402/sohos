@@ -11,6 +11,8 @@ struct percpu {
     uint32_t apic_id;
     uint64_t ticks;
     void *current_thread;
+    uint32_t tlb_online;
+    uint64_t tlb_ack_generation;
 } __attribute__((aligned(64)));
 
 int percpu_init(uint32_t bsp_apic_id, const uint32_t *ap_apic_ids, uint32_t ap_count);

@@ -103,10 +103,25 @@ static int wait_icr_idle(void) {
 int lapic_send_ipi(uint32_t apic_id, uint32_t command) {
     if (apic_id > 255 || regs() == 0)
         return 0;
+
     if (!wait_icr_idle())
         return 0;
+
+    uint64_t rflags;
+    __asm__ volatile("pushfq; popq %0; cli" : "=r"(rflags) :: "memory");
+
+    if (!wait_icr_idle()) {
+        if (rflags & (1ULL << 9))
+            __asm__ volatile("sti" ::: "memory");
+        return 0;
+    }
+
     write_reg(LAPIC_REG_ICR_HIGH, apic_id << 24);
     write_reg(LAPIC_REG_ICR_LOW, command);
+
+    if (rflags & (1ULL << 9))
+        __asm__ volatile("sti" ::: "memory");
+
     return wait_icr_idle();
 }
 

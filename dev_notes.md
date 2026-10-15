@@ -623,3 +623,25 @@ Local invalidation only.
 - Caller is responsible for frame ownership and ensuring stale TLB translations cannot access a reclaimed frame.
 
 so, it returns out_phys but doesn't free it.
+
+# TLB
+
+already have vm_invlpg, can flush for one specific page.
+I already have wakes for other cores but added a tbl_ack_generation to the percpu struct.
+
+mark a CPU online only after its per-CPU attachment, IDT, and local APIC are ready. I'll keep the 
+online CPU set fixed once normal VM operations begin. no CPU hotplug yet for an initial version. Don't need a production
+grade TLB right off the bat. It's a cache ffs.
+
+An interrupt could preempt the code between writing ICR_HIGH and ICR_LOW, and another sender could overwrite the 
+destination. that register pair needs protection by disabling local interrupts around it. lapic_send_ipi is changed for
+that.
+
+for now it is broadcasting to all CPUs and flushes all local translations on all CPUs. inefficient but functional.
+I'll refactor it once I can actually do stuff with this thing.
+
+mf cpu is like : I have a perfectly good translation cached. Why would I check your table again? i miss when cache meant
+a shitty little doubly linked list and hash map. Here it's not enough to change my kernel mapping. I must call invlpg
+and make the tlb cache of the cpu itself clear.
+
+I added tickets and interrupts should be kept on by the waiters.
