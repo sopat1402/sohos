@@ -570,3 +570,56 @@ CPU1	416,862,633	    1,726,237,751	+1,309,375,118
 CPU2	545,354,577	    1,278,932,723	+733,578,146
 
 the threads are therefore, doing their work.
+
+# Page table walking
+
+Need to have a virtual addr and find which page has it. bits 47 to 39 give pml4, 38 to 30 give pdpt, 29 to 21 give pd
+and 20 to 12 give pt. then add offset virt_addr & 0x1FF. I am masking flags with 0x000FFFFFFFFFF000ULL.
+But each time I need to do phys_to_virt and then index the address for the entry and then mask the flags.
+
+pdpt_entry & (1ULL << 7) means 1 GiB mapping if it is true. for pd it is 2 MiB page.
+
+in a 1 GiB mapping, a 30 bit offset is present in virt addr:
+uint64_t phys_addr = (pdpt_entry & 0x000FFFFFC0000000ULL) | (virt_addr & 0x3FFFFFFFULL)
+
+for 2 MiB, uint64_t phys_addr = (pd_entry & 0x000FFFFFFFE00000ULL) | (virt_addr & 0x1FFFFFULL)
+
+now need to make a vm_map to add pages if needed.
+
+If the virtual address is already mapped, it returns the existing physical address.
+If one or more intermediate tables are missing, it allocates only those tables, plus one physical page for the mapping.
+If allocation fails, it frees every page allocated during the failed attempt. It doesn't leave partially installed 
+page-table entries behind.
+New mappings are supervisor-only, writable and non-executable.
+Existing huge-page mappings are left alone rather than accidentally being interpreted as pointers to smaller tables
+
+ordinary kernel page:
+uint64_t phys;
+enum vm_map_status status = vm_map(root_phys, virt_addr, VM_READ | VM_WRITE, &phys);
+
+for a user-readable, user-writable page:
+uint64_t phys;
+enum vm_map_status status = vm_map(root_phys, virt_addr, VM_READ | VM_WRITE | VM_USER, &phys);
+
+for a read-only executable page:
+uint64_t phys;
+enum vm_map_status status = vm_map(root_phys, virt_addr, VM_READ | VM_EXEC, &phys);
+
+next is vm_unmap to clear the page table entry. used when a process exits and when it is no longer needed.
+
+to call,
+uint64_t unmapped_phys;
+
+enum vm_unmap_status status = vm_unmap(root_phys, virt_addr, &unmapped_phys);
+
+if (status == VM_UNMAP_OK) {
+    buddy_free_order(unmapped_phys, 0);
+}
+
+Local invalidation only.
+
+- Removes a 4 KiB mapping and returns its physical frame.
+- Does not free the frame or intermediate page tables.
+- Caller is responsible for frame ownership and ensuring stale TLB translations cannot access a reclaimed frame.
+
+so, it returns out_phys but doesn't free it.
