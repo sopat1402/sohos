@@ -715,3 +715,19 @@ I made the per cpu struct have the gdt and tss struct in it. Now I can reuse mos
 per cpu struct and then gdt[0..4] needs to get null, kernel and user descriptors. then, p->tss address goes into
 gdt[5] and gdt[6]. then I built a gdt_pointer struct with base as p->gdt and limit as sizeof(p->gdt)-1.
 then the same lgdt and cs reload sequence. i then finally execute ltr using the tss sequence 0x28.
+
+K so it is adding the new gdt and the tss to the BSP. I checked with str. but i need to make rsp[0] point to the bsp's
+thread stack top first and then must later do the same for all the other APs. Then IST stacks need to be set up and the
+default double gate to IST[1].
+
+thead_current gives current thread and that'll give me the stack base and size so I will set rsp[0] to their sum but
+as a virtual addr.
+
+ugh i should add comments to my kernel.c it is ugly rn. K so I have a function to set rsp0 to the cur thread's stack
+top. Now doing IST. must make a dedicated stack per cpu for the IST. 16 KiB. Must then make vector 8 use ist1.
+
+so from the buddy allocator I request 16 KiB. that's 4 pages so order 2. then that is physical so i convert to virt and 
+then that's the base so the top is in ist[0]. the others stay zeroed for now. K so the bsp ist allocation is done,
+I just need to make the IDT gate for vector 8 use IST1 and then that's that for the BSP.
+
+I made the IDT use it in idt.c. Make index 8 have ist1.

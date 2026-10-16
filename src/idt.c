@@ -132,17 +132,15 @@ void idt_load(void)
     __asm__ volatile ("lidt %0" : : "m"(idt_ptr) : "memory");
 }
  
-void idt_init(void)
-{
-    for (int i = 0; i < 32; i++)
+void idt_init(void){
+    for (int i = 0; i < 32; i++){
         idt_set_gate(i, isr_stub_table[i], 0, GATE_INTERRUPT);
- 
+    }
+    idt_set_gate(8,isr_stub_table[8],1,GATE_INTERRUPT); //i'm making vector 8 use ist1
     uint64_t stub = (uint64_t)(uintptr_t)irq_stub_base;
     for (uint32_t i = IRQ_VECTOR_FIRST; i < IDT_VECTORS; i++)
         idt_set_gate((int)i, stub + (uint64_t)(i - IRQ_VECTOR_FIRST) * IRQ_STUB_SIZE, 0, GATE_INTERRUPT);
- 
     idt_ptr.limit = sizeof(idt) - 1;
     idt_ptr.base = (uint64_t)(uintptr_t)idt;
- 
     idt_load();
 }

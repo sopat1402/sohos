@@ -40,5 +40,6 @@ struct thread *thread_current(void);
 uint32_t thread_alloc_id(void);
 void thread_set_name(struct thread *t, const char *name);
 void thread_free(struct thread *t);
+void set_tss_rsp0_currthrd();
 
 #endif

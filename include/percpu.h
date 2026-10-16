@@ -35,7 +35,7 @@ int percpu_attach(uint32_t apic_id);
 struct percpu *percpu_by_apic_id(uint32_t apic_id);
 struct percpu *percpu_by_cpu_id(uint32_t cpu_id);
 uint32_t percpu_count(void);
-
+int setup_ist(struct percpu *p);
 static inline struct percpu *percpu_self(void) {
     struct percpu *p;
     __asm__ volatile ("movq %%gs:0, %0" : "=r"(p));

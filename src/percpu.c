@@ -1,6 +1,8 @@
 #include <stdint.h>
 #include "../include/percpu.h"
 #include "../include/kmalloc.h"
+#include "../include/phys.h"
+#include "../include/buddy.h"
 
 static struct percpu *cpus;
 static uint32_t cpu_total;
@@ -62,3 +64,10 @@ int percpu_attach(uint32_t apic_id) {
     return 1;
 }
 
+int setup_ist(struct percpu *p){
+    uint64_t stack_base_phys=buddy_alloc_order(2);
+    if (stack_base_phys==0) return 0;
+    uint64_t stack_top_virt=(uint64_t)(uintptr_t)phys_to_virt(stack_base_phys)+4096*4;
+    p->tss.ist[0]=stack_top_virt;
+    return 1;
+}

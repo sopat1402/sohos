@@ -91,3 +91,8 @@ __attribute__((noreturn)) void thread_exit(void) {
         __asm__ volatile ("cli\n\thlt");
 }
 
+void set_tss_rsp0_currthrd(){
+    struct thread *curr_thrd=thread_current();
+    struct percpu *p=percpu_self();
+    p->tss.rsp[0]=(uint64_t)(uintptr_t)phys_to_virt(curr_thrd->stack_phys + curr_thrd->stack_size) & ~0xFull;
+}

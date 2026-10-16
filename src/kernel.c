@@ -13,6 +13,7 @@
 #include "../include/gdt.h"
 #include "../include/percpu.h"
 #include "../include/sched.h"
+#include "../include/thread.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -50,6 +51,8 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
     }
 
     print("Checking CPU...\n");
+
+    //read acpi and apic
     const void *mbi = phys_to_virt(multiboot_data);
     int rsdp_status = mb2_find_acpi_rsdp(
         mbi,
@@ -131,6 +134,7 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         return;
     }
 
+    //parse multiboot data into a memory map
     if (!memory_regions_init(multiboot_data)) {
         print("[error] No available memory reported\n");
         return;
@@ -168,26 +172,33 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         return;
     }
 
+    //initial bitmap for making a new tree and stack
     bitmap_init(bitmap_region.base, bitmap_region.end - bitmap_region.base);
     mark_free_memory(image_phys_start, image_phys_end, info_start, info_end);
 
+    //make new tree and new stack
     uint64_t lapic_map_phys = ap_plan_ready ? ap_plan.lapic_phys : (bsp_cpu.has_apic ? bsp_cpu.lapic_phys_base : 0);
     if (!new_tree(kernel_phys_start, kernel_phys_end, kernel_virt_start, kernel_virt_end, ap_plan_ready ? ap_plan.trampoline_phys : 0, lapic_map_phys)) {
         print("[error] Page-table setup failed\n");
         return;
     }
+
+    //set up bootstrap gdt
     gdt_load();
 
+    //initialise buddy allocator
     if (!buddy_init(bitmap_region.base,bitmap_region.end - bitmap_region.base)) {
         print("[error] Buddy allocator initialization failed\n");
         return;
     }
 
+    //initialise the heap built on slub
     if (!kmalloc_init()) {
         print("[error] kmalloc initialization failed\n");
         return;
     }
 
+    //set up lapic and timer
     if (!lapic_init(lapic_map_phys) || !lapic_enable()) {
         print("[error] Local APIC setup failed\n");
         return;
@@ -202,6 +213,7 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         return;
     }
 
+    //kzalloc and assign per cpu structs
     if (!percpu_init(bsp_cpu.bsp_apic_id, ap_plan_ready ? ap_plan.apic_ids : 0, ap_plan_ready ? ap_plan.ap_count : 0)) {
         print("[error] per-CPU setup failed\n");
         return;
@@ -211,44 +223,26 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         return;
     }
 
-    struct percpu *p = percpu_self();
-    percpu_gdt_setup(p);
+    //set tss and gdt
+    percpu_gdt_setup(percpu_self());
 
-//tests for the gdt on bsp
-    uint16_t tr;
-    __asm__ volatile ("str %0" : "=r"(tr));
-
-    if (tr != 0x28) {
-        print("[error] ltr failed for GDT setup\n");
-    }
-
-    struct gdt_pointer gdtr;
-    __asm__ volatile ("sgdt %0" : "=m"(gdtr) : : "memory");
-
-    print("GDTR base: ");
-    print_hex(gdtr.base);
-    print("\n");
-    print("Expected:  ");
-    print_hex((uint64_t)(uintptr_t)percpu_self()->gdt);
-    print("\n");
-    print("GDTR limit: ");
-    print_hex(gdtr.limit);
-    print("\n");
-    print("Expected:  ");
-    print_hex(sizeof(percpu_self()->gdt) - 1);
-    print("\n");
-//end of tests
-
+    //boot scheduler and adopt thread
     if (!sched_init()) {
         print("[error] Failed to initialise scheduler");
         return;
     }
-
     if (!sched_adopt_boot_thread()) {
         print("[error] Failed to adopt thread on BSP");
         return;
     }
 
+    //set current thread to rsp0
+    set_tss_rsp0_currthrd();
+
+    //allocate IST
+    setup_ist(percpu_self());
+
+    //Start APs
     print("Starting available CPU cores...\n");
     if (ap_plan_ready) {
         if (!ap_start_all(&ap_plan)) {
@@ -258,9 +252,10 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
         print("All MADT APs are online\n");
     }
+
+    //Start LAPIC timer on BSP
     if (!lapic_timer_start(LAPIC_TICK_HZ)) {
         print("[error] BSP timer start failed\n");
         return;
     }
 }
-
