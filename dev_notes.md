@@ -685,3 +685,33 @@ I just hope I don't end up with a dependency loop where kmalloc tries to use vma
 
 btw I'm not testing rn but a caller need to ensure that vmalloc_init has been called else the allocator head will not
 point to the initial struct.
+
+# Per core TSS and per core GDT
+
+CPU needs to be able to switch stacks. Useful when a ring 3 program (userspace) makes an interrupt. It needs to switch
+to run on the kernel stack and it can't use a user controlled stack.
+
+RSP0 is what it will use. It's the stack pointer. To make it portable btw, I will be keeping only ring 0 and 3.
+Need to make cpu read TSS.RSP0. Each thread needs its own kernel stack. RSP0 must be updated depending on which thread
+is running.
+
+struct tss {
+    uint32_t reserved0;
+    uint64_t rsp[3];
+    uint64_t reserved1;
+    uint64_t ist[7];
+    uint64_t reserved2;
+    uint16_t reserved3;
+    uint16_t iomap_base;
+} __attribute__((packed));
+
+need to add it to each cpu, kmalloc is initialised before. I'll just embed it into the per cpu struct ig. i will give 
+each CPU its own GDT in the per cpu struct too. maybe just pointers idk.
+meh I'm not using pointers for it because per cpu is calling kzalloc anyways.
+
+CPU marks a TSS descriptor busy when loaded with LTR
+
+I made the per cpu struct have the gdt and tss struct in it. Now I can reuse most of the gdt load. I must pass the
+per cpu struct and then gdt[0..4] needs to get null, kernel and user descriptors. then, p->tss address goes into
+gdt[5] and gdt[6]. then I built a gdt_pointer struct with base as p->gdt and limit as sizeof(p->gdt)-1.
+then the same lgdt and cs reload sequence. i then finally execute ltr using the tss sequence 0x28.

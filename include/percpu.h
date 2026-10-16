@@ -5,6 +5,18 @@
 
 #define IA32_GS_BASE_MSR 0xC0000101u
 
+struct tss {
+    uint32_t reserved0;
+    uint64_t rsp[3];
+    uint64_t reserved1;
+    uint64_t ist[7];
+    uint64_t reserved2;
+    uint16_t reserved3;
+    uint16_t iomap_base;
+} __attribute__((packed));
+
+_Static_assert(sizeof(struct tss) == 104, "Invalid TSS size");
+
 struct percpu {
     struct percpu *self;
     uint32_t cpu_id;
@@ -13,6 +25,9 @@ struct percpu {
     void *current_thread;
     uint32_t tlb_online;
     uint64_t tlb_ack_generation;
+
+    uint64_t gdt[7] __attribute__((aligned(64)));
+    struct tss tss __attribute__((aligned(64)));
 } __attribute__((aligned(64)));
 
 int percpu_init(uint32_t bsp_apic_id, const uint32_t *ap_apic_ids, uint32_t ap_count);

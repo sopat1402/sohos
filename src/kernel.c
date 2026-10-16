@@ -211,6 +211,34 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         return;
     }
 
+    struct percpu *p = percpu_self();
+    percpu_gdt_setup(p);
+
+//tests for the gdt on bsp
+    uint16_t tr;
+    __asm__ volatile ("str %0" : "=r"(tr));
+
+    if (tr != 0x28) {
+        print("[error] ltr failed for GDT setup\n");
+    }
+
+    struct gdt_pointer gdtr;
+    __asm__ volatile ("sgdt %0" : "=m"(gdtr) : : "memory");
+
+    print("GDTR base: ");
+    print_hex(gdtr.base);
+    print("\n");
+    print("Expected:  ");
+    print_hex((uint64_t)(uintptr_t)percpu_self()->gdt);
+    print("\n");
+    print("GDTR limit: ");
+    print_hex(gdtr.limit);
+    print("\n");
+    print("Expected:  ");
+    print_hex(sizeof(percpu_self()->gdt) - 1);
+    print("\n");
+//end of tests
+
     if (!sched_init()) {
         print("[error] Failed to initialise scheduler");
         return;
