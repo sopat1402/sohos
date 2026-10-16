@@ -668,6 +668,11 @@ static void ap_kernel_entry(uint32_t apic_id)
             __asm__ volatile ("pause");
     }
 
+    struct percpu *p = percpu_self();
+    percpu_gdt_setup(p);
+    setup_ist(p);
+    set_tss_rsp0_currthrd();
+
     if (!lapic_timer_start(LAPIC_TICK_HZ)) {
         for (;;)
             __asm__ volatile ("cli\n\thlt");
@@ -677,8 +682,7 @@ static void ap_kernel_entry(uint32_t apic_id)
     sched_idle_loop();
 }
 
-int ap_start_all(const struct ap_boot_plan *plan)
-{
+int ap_start_all(const struct ap_boot_plan *plan){
     if (plan == 0 || plan->ap_count == 0)
         return 1;
 
@@ -695,37 +699,26 @@ int ap_start_all(const struct ap_boot_plan *plan)
     if (cr3 > 0xffffffffULL)
         return 0;
 
-    volatile struct ap_trampoline_params *params =
-        (volatile struct ap_trampoline_params *)(uintptr_t)
-        (plan->trampoline_phys + AP_TRAMPOLINE_PARAMS_OFFSET);
-
+    volatile struct ap_trampoline_params *params =(volatile struct ap_trampoline_params *)(uintptr_t)(plan->trampoline_phys + AP_TRAMPOLINE_PARAMS_OFFSET);
     for (uint32_t i = 0; i < plan->ap_count; i++) {
         uint32_t target = plan->apic_ids[i];
-
         if (target > 255)
             return 0;
-
         uint64_t stack_phys = buddy_alloc_order(AP_STACK_ORDER);
         if (stack_phys == 0)
             return 0;
-
-        uint64_t stack_top =
-            (uint64_t)(uintptr_t)phys_to_virt(stack_phys + AP_STACK_BYTES);
-
+        uint64_t stack_top =(uint64_t)(uintptr_t)phys_to_virt(stack_phys + AP_STACK_BYTES);
         params->trampoline_phys = (uint32_t)plan->trampoline_phys;
         params->cr3_phys = (uint32_t)cr3;
         params->stack_virt_top = stack_top;
-        params->entry_virt =
-            (uint64_t)(uintptr_t)ap_kernel_entry;
+        params->entry_virt =(uint64_t)(uintptr_t)ap_kernel_entry;
         params->apic_id = target;
         params->reserved = 0;
-
+        struct percpu *p = percpu_by_apic_id(target);
+        p->boot_stack_base = phys_to_virt(stack_phys);
+        p->boot_stack_size = AP_STACK_BYTES;
         atomic_thread_fence(memory_order_release);
-
-        uint32_t previous =
-            atomic_load_explicit(&ap_online_count,
-                                 memory_order_acquire);
-
+        uint32_t previous =atomic_load_explicit(&ap_online_count,memory_order_acquire);
         /* INIT assert, delay, INIT deassert, then SIPI. */
         if (!lapic_send_ipi(target, 0x0000c500u))
             return 0;

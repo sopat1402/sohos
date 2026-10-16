@@ -10,6 +10,9 @@
 
 #define SCHED_IPI_COMMAND (0x4000u | SCHED_IPI_VECTOR)
 
+extern char kernel_stack_bottom;
+extern char kernel_stack_top;
+
 struct runqueue {
     spinlock_t lock;
     struct thread *head;
@@ -95,22 +98,35 @@ int sched_init(void) {
 int sched_adopt_boot_thread(void) {
     if (rqs == 0)
         return 0;
+
     uint64_t flags = irq_save();
     struct percpu *p = percpu_self();
+
+    if (p->boot_stack_base == 0 || p->boot_stack_size < sizeof(uint64_t)) {
+        irq_restore(flags);
+        return 0;
+    }
+
     struct runqueue *rq = &rqs[p->cpu_id];
     struct thread *t = (struct thread *)kzalloc(sizeof(struct thread));
     if (t == 0) {
         irq_restore(flags);
         return 0;
     }
+
     t->id = thread_alloc_id();
     t->state = THREAD_RUNNING;
     t->cpu = p->cpu_id;
     t->on_cpu = 1;
+    t->stack_base = p->boot_stack_base;
+    t->stack_size = p->boot_stack_size;
+    *(uint64_t *)t->stack_base = THREAD_CANARY;
+
     thread_set_name(t, "idle");
     rq->idle = t;
     p->current_thread = t;
     __atomic_store_n(&rq->online, 1, __ATOMIC_RELEASE);
+
     irq_restore(flags);
     return 1;
 }
@@ -153,6 +169,7 @@ void schedule(void) {
     __atomic_store_n(&next->on_cpu, 1, __ATOMIC_RELEASE);
     __atomic_store_n(&rq->busy, next != rq->idle ? 1u : 0u, __ATOMIC_RELAXED);
     p->current_thread = next;
+    set_tss_rsp0_currthrd();
     spin_unlock(&rq->lock);
     struct thread *last = switch_to(prev, next);
     sched_finish_switch(last);

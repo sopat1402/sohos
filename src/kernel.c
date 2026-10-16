@@ -24,6 +24,8 @@ extern char __kernel_phys_end;
 extern char __kernel_virt_start;
 extern char __kernel_virt_end;
 
+extern char kernel_stack_bottom, kernel_stack_top;
+
 static struct rsdp_v2 boot_rsdp;
 static uint8_t boot_rsdp_revision;
 static struct cpu_preapic_info bsp_cpu;
@@ -225,7 +227,9 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
     //set tss and gdt
     percpu_gdt_setup(percpu_self());
-
+    struct percpu *p = percpu_self();
+    p->boot_stack_base = &kernel_stack_bottom;
+    p->boot_stack_size = (uintptr_t)&kernel_stack_top - (uintptr_t)&kernel_stack_bottom;
     //boot scheduler and adopt thread
     if (!sched_init()) {
         print("[error] Failed to initialise scheduler");

@@ -528,28 +528,28 @@ initially new threads go to the least loaded core, and an idle core steals if it
 Round robin scheduling first. Everything above builds on the same switch and queue machinery. Plan is CFS style red
 black tree and a vruntime for each.
 
-The scheduler: one run queue per core, round robin, preemptive.
-Run queue: an intrusive FIFO list guarded by a per-queue spinlock that is only ever taken with interrupts off.
-No code holds two run queue locks at once, so there is no lock ordering to get wrong. Threads are bound to the core
-they are first enqueued on, so only that core ever picks them. There is no migration or stealing yet.
-schedule(): disables interrupts, puts the running thread at the tail if it is still runnable (the idle thread is never
-queued), pops the head or falls back to the core's idle thread, and switches. If the pick is the same thread it just
-refreshes its slice and returns. The queue lock is dropped before switch_to. The thread that resumes runs
-sched_finish_switch for the thread it replaced, which clears that thread's on_cpu flag and frees it if it was a
-zombie. A new thread runs the same step from thread_trampoline. Because the finish step runs only after the old
-stack has been left, a zombie's stack is never freed while in use.
-sched_tick runs from the timer handler after the EOI, so the switch it triggers cannot block further ticks. It
-counts the running thread's slice down and calls schedule when the slice is gone and something else is ready,
-or when the core is idle and work has arrived.
-Idle: every core's boot context is adopted by sched_adopt_boot_thread as that core's idle thread. The idle loop
-checks the queue with interrupts off and then uses sti followed directly by hlt. sti takes effect after the next
-instruction, so an interrupt cannot slip in between and leave the core halted with work waiting.
-Wakeups across cores: sched_enqueue on another core sends it SCHED_IPI_VECTOR, whose handler reschedules only if the
-target is idle with work waiting.
-Placement: sched_pick_cpu picks the online core with the smallest ready count plus one if it is running a non-idle
-thread, starting from a rotating cursor so ties spread out.
-no percpu pointer across anything that can reschedule once threads can migrate. schedule() and sched_tick keep theirs 
-only because nothing migrates yet.
+- The scheduler: one run queue per core, round robin, preemptive.
+- Run queue: an intrusive FIFO list guarded by a per-queue spinlock that is only ever taken with interrupts off.
+    No code holds two run queue locks at once, so there is no lock ordering to get wrong. Threads are bound to the core
+    they are first enqueued on, so only that core ever picks them. There is no migration or stealing yet.
+- schedule(): disables interrupts, puts the running thread at the tail if it is still runnable (the idle thread is never
+    queued), pops the head or falls back to the core's idle thread, and switches. If the pick is the same thread it just
+    refreshes its slice and returns. The queue lock is dropped before switch_to. The thread that resumes runs
+    sched_finish_switch for the thread it replaced, which clears that thread's on_cpu flag and frees it if it was a
+    zombie. A new thread runs the same step from thread_trampoline. Because the finish step runs only after the old
+    stack has been left, a zombie's stack is never freed while in use.
+    sched_tick runs from the timer handler after the EOI, so the switch it triggers cannot block further ticks. It
+    counts the running thread's slice down and calls schedule when the slice is gone and something else is ready,
+    or when the core is idle and work has arrived.
+- Idle: every core's boot context is adopted by sched_adopt_boot_thread as that core's idle thread. The idle loop
+    checks the queue with interrupts off and then uses sti followed directly by hlt. sti takes effect after the next
+    instruction, so an interrupt cannot slip in between and leave the core halted with work waiting.
+- Wakeups across cores: sched_enqueue on another core sends it SCHED_IPI_VECTOR, whose handler reschedules only if the
+    target is idle with work waiting.
+- Placement: sched_pick_cpu picks the online core with the smallest ready count plus one if it is running a non-idle
+    thread, starting from a rotating cursor so ties spread out.
+    no percpu pointer across anything that can reschedule once threads can migrate. schedule() and sched_tick keep their
+    only because nothing migrates yet.
 
 To integrate, I should init the scheduler before ap_start and save the CPUs boot context as its idle thread.
 
@@ -731,3 +731,14 @@ then that's the base so the top is in ist[0]. the others stay zeroed for now. K 
 I just need to make the IDT gate for vector 8 use IST1 and then that's that for the BSP.
 
 I made the IDT use it in idt.c. Make index 8 have ist1.
+
+Made all APs use it in ap_kernel_entry. Also in sched.c schedule() I made it call set_rsp0_currthrd()
+There is however a hiccup with the thread stuff.
+sched_adopt_boot_thread() leaves the thread's stack_size and stack_phys as zero. Switching back to it would set the
+rsp0 to the hhdm offset.
+I added boot stack base and size to the percpu struct.
+
+
+# Guard paged thread stacks
+
+

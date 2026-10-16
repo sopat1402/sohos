@@ -25,7 +25,8 @@ struct percpu {
     void *current_thread;
     uint32_t tlb_online;
     uint64_t tlb_ack_generation;
-
+    void *boot_stack_base;
+    uint64_t boot_stack_size;
     uint64_t gdt[7] __attribute__((aligned(64)));
     struct tss tss __attribute__((aligned(64)));
 } __attribute__((aligned(64)));
