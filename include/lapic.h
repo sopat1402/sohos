@@ -18,5 +18,6 @@ int lapic_timer_install(void);
 int lapic_timer_start(uint32_t hz);
 void lapic_set_tick_hook(void (*hook)(void));
 uint64_t lapic_timer_ticks(uint32_t apic_id);
+uint64_t lapic_debug_timer_irq_count(void);
 
 #endif

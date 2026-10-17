@@ -755,7 +755,7 @@ and mapped-page count in the allocation record. Nothing is ever unmapped by hand
 
 K with that, I'll move on. I'll come back and implement the above later.
 
-# Wait queues. mutexes and sleep
+# Wait queues. mutexes
 
 the scheduler can't do blocking yet. I need to add that. Wait queue will be a simple linked list.
 
@@ -840,3 +840,45 @@ slots. Exercises small allocations and larger allocations exceeding 2 KiB, fills
 byte patterns, verifies the contents before freeing, and periodically yields to permit interleaving between workers. 
 Checks for allocation failures and memory corruption, then verifies that buddy-page availability returns to its recorded
 baseline after worker completion and reaping.
+
+# Sleep
+
+a thread sleeping musn't use CPU. it must call sleep_ticks(ticks) and then i calculate the deadline and set it to
+blocked and remove it from runnable and invoke the scheduler. Then the timer is allowed to continue. When the deadline
+comes, make the thread runnable and wake it.
+It won't run exactly at the deadline. Deadline is basically for eligibility for it to run again, there can be a delay
+based on latency.
+
+Here the calibrated LAPIC timer will be used.
+
+- struct sleep entry is used as a node in a linked list of sleepers. it has the next pointer, deadline, wait queue and 
+the waiter. list is sorted by deadline. earliest sleeper is at the head.
+- sleep_tick_before compares deadlines with integer wraparound considered.
+- sleep_tick_expired checks if a deadline has arrived.
+- sleep_insert walks the linked list till it finds an entry with a later deadline and inserts it before it. the list 
+    isn't locked btw.
+- sleep_pop_expired returns null of the head isn't expired or the list is empty. else it removes the expired entry and
+    returns it to the caller.
+- sleep_ticks is a public api for threads, it reads the current cpu but first returns immediately for zero tick count.
+    it reads the cpu tick counter and calculates the deadline and then makes a sleep entry and its wait queue. it then
+    registers the thread for blocking and adds it to the cpu's sleep list. it then invokes the scheduler so that
+    another thread can execute. it then resumes when awakened and cleans the wait queue up
+- sleep_ticks_tick checks sleepers when a timer interrupts it. it identifies the caller cpu, removes expired entries
+    from its sleep list, wakes the associated threads and then continues till there are no expired sleeps. it makes
+    threads eligible to run but doesn't run them. that's for the scheduler.
+
+It must also be safe in interrupt context. That means no blocking, no calling sleep_ticks() recursively, and no acquiring
+a lock in a way that can deadlock against code interrupted while holding that same lock. deadlocks are a nightmare when
+there are so many spinlocks.
+
+sched_tick now calls sleep_ticks_tick() because every lapic timer interrupt invokes sched_tick via callback
+
+k so i got 2 warnings saying target tick counter unchanged right after the progress message that says all are 0 including
+done, which is 0/3 and after that i ran out of vga space. like right after the first waiting, start tick=0. This is in
+my test.
+
+IF=0 means maskable interrupts are disabled on CPU 0. LAPIC timer relies on interrupts, so the CPU's tick counter stays 
+at zero, the sleeping threads never wake, and the test times out. target=1 confirms I'm watching the correct per CPU 
+structure
+
+AAAAAAH fuck me I never executed STI that's why. It passed now. I spent fucking half an hour searching for the bug.

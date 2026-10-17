@@ -7,6 +7,7 @@
 #include "../include/kmalloc.h"
 #include "../include/spinlock.h"
 #include "../include/display.h"
+#include "../include/sleep.h"
 
 #define SCHED_IPI_COMMAND (0x4000u | SCHED_IPI_VECTOR)
 
@@ -202,6 +203,7 @@ void sched_tick(void) {
     struct thread *cur = (struct thread *)p->current_thread;
     if (cur == 0 || __atomic_load_n(&rq->online, __ATOMIC_ACQUIRE) == 0)
         return;
+    sleep_ticks_tick();
     uint32_t ready = __atomic_load_n(&rq->nr_ready, __ATOMIC_RELAXED);
     if (cur == rq->idle) {
         if (ready > 0)

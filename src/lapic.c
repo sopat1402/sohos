@@ -42,7 +42,11 @@ static uint64_t lapic_rdmsr(uint32_t msr) {
     __asm__ volatile ("rdmsr" : "=a"(low), "=d"(high) : "c"(msr) : "memory");
     return ((uint64_t)high << 32) | low;
 }
+static volatile uint64_t lapic_debug_timer_irqs;
 
+uint64_t lapic_debug_timer_irq_count(void) {
+    return __atomic_load_n(&lapic_debug_timer_irqs, __ATOMIC_RELAXED);
+}
 static void lapic_wrmsr(uint32_t msr, uint64_t value) {
     uint32_t low = (uint32_t)value;
     uint32_t high = (uint32_t)(value >> 32);
@@ -147,6 +151,7 @@ uint32_t lapic_timer_ticks_per_ms(void) {
 }
 
 static void lapic_timer_handler(struct interrupt_frame *frame) {
+__atomic_fetch_add(&lapic_debug_timer_irqs, 1, __ATOMIC_RELAXED);
     (void)frame;
     __atomic_fetch_add(&percpu_self()->ticks, 1, __ATOMIC_RELAXED);
     lapic_eoi();
