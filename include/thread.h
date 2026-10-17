@@ -30,6 +30,7 @@ struct thread {
     uint32_t slice_left;
     uint32_t on_cpu;
     int32_t exit_code;
+    uint8_t wake_pending;
     char name[THREAD_NAME_LEN];
 };
 

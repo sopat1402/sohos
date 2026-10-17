@@ -14,6 +14,7 @@
 #include "../include/percpu.h"
 #include "../include/sched.h"
 #include "../include/thread.h"
+#include "../include/vmalloc.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -245,6 +246,9 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
     //allocate IST
     setup_ist(percpu_self());
+
+    //initialise vmalloc
+    vmalloc_init();
 
     //Start APs
     print("Starting available CPU cores...\n");

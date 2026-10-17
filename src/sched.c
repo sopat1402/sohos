@@ -10,9 +10,6 @@
 
 #define SCHED_IPI_COMMAND (0x4000u | SCHED_IPI_VECTOR)
 
-extern char kernel_stack_bottom;
-extern char kernel_stack_top;
-
 struct runqueue {
     spinlock_t lock;
     struct thread *head;
@@ -134,8 +131,27 @@ int sched_adopt_boot_thread(void) {
 void sched_finish_switch(struct thread *prev) {
     if (prev == 0)
         return;
+
+    struct runqueue *rq = &rqs[prev->cpu];
+    uint64_t flags = spin_lock_irqsave(&rq->lock);
+
     __atomic_store_n(&prev->on_cpu, 0, __ATOMIC_RELEASE);
-    if (prev->state == THREAD_ZOMBIE)
+
+    if (prev->wake_pending) {
+        prev->wake_pending = 0;
+
+        if (prev->state == THREAD_BLOCKED) {
+            prev->state = THREAD_READY;
+            prev->slice_left = SCHED_SLICE_TICKS;
+            rq_push(rq, prev);
+        }
+    }
+
+    int zombie = prev->state == THREAD_ZOMBIE;
+
+    spin_unlock_irqrestore(&rq->lock, flags);
+
+    if (zombie)
         thread_free(prev);
 }
 
@@ -255,4 +271,110 @@ __attribute__((noreturn)) void sched_idle_loop(void) {
         }
         __asm__ volatile ("sti\n\thlt" : : : "memory");
     }
+}
+
+void sched_block_current(void) {
+    uint64_t flags = irq_save();
+    struct percpu *p = percpu_self();
+    struct runqueue *rq = &rqs[p->cpu_id];
+    struct thread *curr_thrd = (struct thread *)p->current_thread;
+    if (curr_thrd == 0 || curr_thrd == rq->idle) {
+        irq_restore(flags);
+        return;
+    }
+    spin_lock(&rq->lock);
+    curr_thrd->state = THREAD_BLOCKED;
+    spin_unlock(&rq->lock);
+    schedule();
+    irq_restore(flags);
+}
+
+int sched_wake_thread(struct thread *t) {
+    if (t == 0 || rqs == 0 || t->cpu >= cpu_count)
+        return 0;
+    uint32_t cpu = t->cpu;
+    struct runqueue *rq = &rqs[cpu];
+    uint64_t flags = spin_lock_irqsave(&rq->lock);
+    if (t->state != THREAD_BLOCKED) {
+        spin_unlock_irqrestore(&rq->lock, flags);
+        return 0;
+    }
+    if (t->on_cpu) {
+        t->wake_pending = 1;
+    } else {
+        t->state = THREAD_READY;
+        t->slice_left = SCHED_SLICE_TICKS;
+        rq_push(rq, t);
+    }
+    spin_unlock_irqrestore(&rq->lock, flags);
+    struct percpu *me = percpu_self();
+    if (me->cpu_id != cpu) {
+        struct percpu *target = percpu_by_cpu_id(cpu);
+        if (target != 0)
+            lapic_send_ipi(target->apic_id, SCHED_IPI_COMMAND);
+    }
+    return 1;
+}
+
+int sched_prepare_block_current(void) {
+    uint64_t flags = irq_save();
+    struct percpu *p = percpu_self();
+
+    if (rqs == 0 || p->cpu_id >= cpu_count) {
+        irq_restore(flags);
+        return 0;
+    }
+
+    struct runqueue *rq = &rqs[p->cpu_id];
+    struct thread *t = (struct thread *)p->current_thread;
+
+    if (t == 0 || t == rq->idle) {
+        irq_restore(flags);
+        return 0;
+    }
+
+    uint64_t rq_flags = spin_lock_irqsave(&rq->lock);
+
+    if (t->state != THREAD_RUNNING || !t->on_cpu) {
+        spin_unlock_irqrestore(&rq->lock, rq_flags);
+        irq_restore(flags);
+        return 0;
+    }
+
+    t->state = THREAD_BLOCKED;
+
+    spin_unlock_irqrestore(&rq->lock, rq_flags);
+    irq_restore(flags);
+    return 1;
+}
+
+int sched_cancel_block_current(void) {
+    uint64_t flags = irq_save();
+    struct percpu *p = percpu_self();
+
+    if (rqs == 0 || p->cpu_id >= cpu_count) {
+        irq_restore(flags);
+        return 0;
+    }
+
+    struct runqueue *rq = &rqs[p->cpu_id];
+    struct thread *t = (struct thread *)p->current_thread;
+
+    if (t == 0) {
+        irq_restore(flags);
+        return 0;
+    }
+
+    uint64_t rq_flags = spin_lock_irqsave(&rq->lock);
+    int ok = 0;
+
+    if (t->on_cpu && t->state == THREAD_BLOCKED) {
+        t->state = THREAD_RUNNING;
+        t->wake_pending = 0;
+        ok = 1;
+    }
+
+    spin_unlock_irqrestore(&rq->lock, rq_flags);
+    irq_restore(flags);
+    return ok;
 }

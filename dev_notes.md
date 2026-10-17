@@ -741,4 +741,36 @@ I added boot stack base and size to the percpu struct.
 
 # Guard paged thread stacks
 
+I need to update thread_create_on and give each page a guard page so that an overflow goes into that and can trigger a
+page fault otherwise it'll just double fault. 
+Current vfree assumes every page in there is mapped. If i unmap the guard manually (vmalloc maps all), vfree will fail
+and quarantine the allocation.
 
+I'll circle back to this later as I have to add wait queues, mutexes.
+
+or....
+don’t map the guard page at all. Have vmalloc reserve the extra virtual page in its range bookkeeping and map only the 
+real pages. vfree then unmaps only the real pages and releases the whole range, guard included. Store the guard count 
+and mapped-page count in the allocation record. Nothing is ever unmapped by hand, so nothing can double fault.
+
+K with that, I'll move on. I'll come back and implement the above later.
+
+# Wait queues. mutexes and sleep
+
+the scheduler can't do blocking yet. I need to add that. Wait queue will be a simple linked list.
+
+The linked list part is done but I need to be able to make a thread block and wake to actually apply to wait queue.
+
+If the current thread's state is already THREAD_BLOCKED, it doesn't get put back on the ready queue. The scheduler 
+selects another runnable thread, or the idle thread if none exists but, sched_enqueue() unconditionally marks a thread 
+ready and adds it to a runqueue. A thread that is in the process of blocking may still be executing on its CPU. 
+Enqueuing it onto another CPU at that moment could let two CPUs execute the same thread. State must be changed between
+busy and ready but the state change outside of the runqueue lock will race with the scheduler.
+
+subtle race: after spun unlock but before schedule someone could wake the thread. so I need to add a wake pending flag
+to my thread struct. It essentially is saying : someone wrote this thread but hasn't switched CPU yet.
+on_cpu protocol needs to account for when a thread is already blocked and has switched off its CPU. sched_finish_switch()
+must not race with sched_wake_thread() over the same thread's state, and the pending wakeup must be consumed exactly once
+
+caller must check its condition again after registering... prevents a wakeup that happened just before registration from
+being lost.
