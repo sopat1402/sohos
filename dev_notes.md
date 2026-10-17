@@ -774,3 +774,69 @@ must not race with sched_wake_thread() over the same thread's state, and the pen
 
 caller must check its condition again after registering... prevents a wakeup that happened just before registration from
 being lost.
+
+## threads test
+
+I added a LOT of tests, about 589 lines of tests for threads and it passed. so it is quite an achievement and next is
+sleep_ticks. the test desciption : 
+
+The scheduler test suite validates thread creation and execution, scheduling fairness, timer-driven preemption, 
+CPU affinity, thread exit and reaping, wait-queue synchronization, and concurrent heap allocation.
+
+1. Thread execution and invariants
+
+Creates eight worker threads, each performing 1,000 atomic increments with periodic yields. Checks rejection of a null 
+thread function, successful thread creation and completion, the exact shared-counter total, valid running state and 
+thread names, stack bounds and canary integrity, the per-CPU TSS RSP0 value, and uniqueness of thread IDs. On SMP 
+systems, also checks that execution occurs across multiple CPUs.
+
+2. Round-robin scheduling
+
+Pins two worker threads to the same CPU. Both wait behind a start gate, then perform 200 iterations of recording their 
+execution order and yielding. Verifies that all 400 execution events are recorded and that consecutive events alternate 
+strictly between the two threads.
+
+3. Timer-driven preemption
+
+Pins two busy-loop threads to the same CPU. Neither thread voluntarily yields while running; each repeatedly increments 
+its own counter until a shared stop flag is set. Verifies that both threads make progress, continue advancing between 
+observations, and exit after the stop flag is raised. This exercises timer-driven preemption independently of voluntary 
+yielding.
+
+4. Per-core thread placement
+
+Creates one thread pinned to each available CPU, up to the test limit of 64 CPUs. Each thread records whether it executed
+on the requested CPU. Verifies successful creation, eventual execution, and correct CPU placement.
+
+5. Thread exit and reaping
+
+Warms up the relevant kmalloc size classes and records the baseline number of available buddy pages. Checks that creation
+on an invalid CPU is rejected without leaking memory. Creates a burst of 64 short-lived threads, waits for completion, 
+and verifies that exited threads are eventually reaped and buddy-page availability returns to baseline.
+
+6. Wait-queue ping-pong
+
+Runs two threads that exchange turns through separate wait queues for 10,000 iterations per thread. Checks that both 
+threads finish, the total handoff count reaches 20,000, and no incorrect turn is observed. Exercises both same-core and 
+cross-core handoffs when multiple CPUs are available. A timeout also detects hangs consistent with lost wakeups.
+
+7. Wake-one synchronization
+
+Creates six semaphore-style waiters on a shared wait queue. Each waiter blocks until a permit is available, consuming 
+permits through an atomic decrement. Adds permits one at a time and invokes wait_queue_wake_one for each permit. Checks 
+progress through the first half of the waiters, verifies that no additional waiter completes during that phase, then 
+releases the remaining waiters and checks for successful completion without waiter errors.
+
+8. Wake-all synchronization
+
+Creates six waiters that block while a shared gate remains closed. Opens the gate and repeatedly invokes 
+wait_queue_wake_one until the wait queue is empty. Verifies that all six waiters eventually complete and that no waiter 
+reports a blocking failure.
+
+9. Concurrent allocation stress
+
+Runs eight worker threads, each performing 1,500 randomized allocation and deallocation iterations across 16 pointer 
+slots. Exercises small allocations and larger allocations exceeding 2 KiB, fills allocated regions with deterministic 
+byte patterns, verifies the contents before freeing, and periodically yields to permit interleaving between workers. 
+Checks for allocation failures and memory corruption, then verifies that buddy-page availability returns to its recorded
+baseline after worker completion and reaping.

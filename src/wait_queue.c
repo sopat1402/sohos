@@ -2,19 +2,9 @@
 #include "../include/thread.h"
 #include "../include/percpu.h"
 #include "../include/sched.h"
+#include "../include/wait_queue.h"
 #include <stdint.h>
 #include <stddef.h>
-
-struct wait_queue_entry {
-    struct thread *thread;
-    struct wait_queue_entry *next;
-};
-
-struct wait_queue {
-    struct wait_queue_entry *head;
-    struct wait_queue_entry *tail;
-    spinlock_t lock;
-};
 
 void wait_queue_init(struct wait_queue *q) {
     q->head = NULL;

@@ -15,6 +15,7 @@
 #include "../include/sched.h"
 #include "../include/thread.h"
 #include "../include/vmalloc.h"
+#include "../tests/sched_test.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -266,4 +267,6 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("[error] BSP timer start failed\n");
         return;
     }
+
+    sched_test_run();
 }
