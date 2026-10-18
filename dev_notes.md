@@ -755,7 +755,7 @@ and mapped-page count in the allocation record. Nothing is ever unmapped by hand
 
 K with that, I'll move on. I'll come back and implement the above later.
 
-# Wait queues. mutexes
+# Wait queues
 
 the scheduler can't do blocking yet. I need to add that. Wait queue will be a simple linked list.
 
@@ -774,6 +774,8 @@ must not race with sched_wake_thread() over the same thread's state, and the pen
 
 caller must check its condition again after registering... prevents a wakeup that happened just before registration from
 being lost.
+struct wait_queue_entry entry = {0}; for the prepare to wait.
+so wait queue init doesn't need the caller to define the struct. just to give s pointer where it can be initialised
 
 ## threads test
 
@@ -882,3 +884,45 @@ at zero, the sleeping threads never wake, and the test times out. target=1 confi
 structure
 
 AAAAAAH fuck me I never executed STI that's why. It passed now. I spent fucking half an hour searching for the bug.
+
+# Mutexes
+
+Just blocking instead of spinning. The owner can be descheduled while holding a mutex but can't be used in interrupt
+context and it needs scheduler integration. The difficulty is coordinating the lock state with the scheduler.
+k so a mutex struct with an owner, a lock for its internal data. spinlock for updating the owner. it just needs to set a
+thread to blocking when it asks to grab the mutex and the mutex is occupied right? but it also needs a wait queue then 
+to send a wake. wild how i'm literally building a mutex and engineering it.
+
+Mutex lock and unlock : the owner change is protected. Wait queue isn't from the mutex side.
+
+now I need a mutex init. will it return a struct mutex or a pointer mutex that it vmallocs or will it be defined at the
+scope the user wants? that makes more sense and then they call init and pass the pointer.
+
+Need to add recursive mutexes and then test it. in a non recursive mutex if it tries recursive it would block itself.
+Returning immediately makes mutex_lock() behave recursively without tracking recursion depth, which breaks the 
+lock/unlock contract.
+
+so i have a uint64_t recursion depth. i'd like to see a cunt call a mutex recursively 2^63 times. Just need to add
+overflow protection.
+
+## Mutex Tests
+
+The mutex test suite validates recursive locking, ownership retention, mutual exclusion, and concurrent contention across CPUs.
+
+### Recursive Locking
+
+The test acquires the same mutex twice from the owning thread and verifies that the owner remains unchanged and `recursion_depth` reaches 2. After the first unlock, ownership must be retained and the recursion depth must decrease to 1. Only the second unlock should set `owner` to `NULL` and `recursion_depth` to 0.
+
+### Concurrent Contention and Wakeups
+
+Four worker threads are created and distributed across available CPUs using `thread_create_on()`. Each worker performs 2,000 iterations, acquiring the shared mutex twice per iteration to exercise recursive locking under contention.
+
+Inside the critical section, each worker atomically sets a shared `inside` flag and increments a shared counter. If the flag was already set, the test records a mutual-exclusion failure. Workers periodically yield while holding the mutex, including after the first recursive unlock, to exercise scheduling and ensure that the mutex remains held until the final unlock.
+
+The test waits for all successfully created workers to finish, with a timeout of 3,000 scheduler ticks. On timeout, it reports each worker's assigned CPU, completed iterations, and last recorded execution stage to help diagnose deadlocks or lost wakeups.
+
+The final checks verify that all four workers were created, the shared counter reached the expected total of 8,000 increments, no overlapping critical sections were detected, and the critical-section flag was cleared.
+
+### Diagnostics and Limitations
+
+The test reports results for each test group and a final count of passed and failed checks. A timeout provides diagnostic evidence of a possible deadlock or lost wakeup, but does not by itself identify the underlying cause. The contention test exercises likely race conditions under scheduling and cross-CPU execution; it does not prove that every possible interleaving is safe.
