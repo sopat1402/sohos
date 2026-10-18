@@ -159,7 +159,7 @@ _start:
 
     mov ecx, 0xC0000080
     rdmsr
-    or eax, 1 << 8
+    or eax, (1 << 8) | (1 << 11)
     wrmsr
 
     mov eax, cr0

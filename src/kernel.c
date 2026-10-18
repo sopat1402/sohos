@@ -15,7 +15,6 @@
 #include "../include/sched.h"
 #include "../include/thread.h"
 #include "../include/vmalloc.h"
-#include "../tests/mutex_test.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -270,6 +269,4 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
     //execute sti
     __asm__ volatile("sti" ::: "memory");
-
-    mutex_race_test_run();
 }

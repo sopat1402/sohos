@@ -38,28 +38,36 @@ SECTIONS
 
     .text ALIGN(0x1000) : AT(__kernel_phys_start)
     {
+        __text_start = .;
         *(.text .text.*)
+        __text_end = .;
     } :text
 
     .rodata ALIGN(0x1000) :
         AT(ALIGN(LOADADDR(.text) + SIZEOF(.text), 0x1000))
     {
+        __rodata_start = .;
         *(.rodata .rodata.*)
+        __rodata_end = .;
     } :rodata
 
     .data ALIGN(0x1000) :
         AT(ALIGN(LOADADDR(.rodata) + SIZEOF(.rodata), 0x1000))
     {
+        __data_start = .;
         *(.data .data.*)
         *(.got .got.*)
+        __data_end = .;
     } :data
 
     .bss ALIGN(0x1000) (NOLOAD) :
         AT(ALIGN(LOADADDR(.data) + SIZEOF(.data), 0x1000))
     {
+        __bss_start = .;
         *(COMMON)
         *(.bss .bss.*)
         . = ALIGN(0x1000);
+        __bss_end = .;
     } :data
 
     __kernel_virt_end = .;

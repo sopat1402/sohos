@@ -926,3 +926,50 @@ The final checks verify that all four workers were created, the shared counter r
 ### Diagnostics and Limitations
 
 The test reports results for each test group and a final count of passed and failed checks. A timeout provides diagnostic evidence of a possible deadlock or lost wakeup, but does not by itself identify the underlying cause. The contention test exercises likely race conditions under scheduling and cross-CPU execution; it does not prove that every possible interleaving is safe.
+
+# NX and W^X
+
+NX will make sure that non executable pages don't run code. W^X will make sure a page can't be both writeable and
+executable.
+
+in entry.S I have EFER.LME so i just need to or it with 0x11 for EFER.NXE. also in ap_trampoline
+
+Now I need to enforce W XOR X. .text is executable and read only, no write. .data, .bss, heaps and stacks are not 
+executable but are readable and writable.
+
+now that nxe is active, the cpu's mmu will check bit 63 for NX (no execute). if it is 0, instruction retrieval is
+allowed (depending on ring and privilege).
+
+to vm_map i added:
+if ((flags & VM_WRITE) && (flags & VM_EXEC))
+    return VM_MAP_BAD_FLAGS;
+
+also in vm_map i was hardcoding the table entry flags to have PTE_USER. I added this:
+if (flags & VM_USER) {
+    table_entry_flags |= PTE_USER;
+}
+
+vm_entry_allows is already doing effective permission validation against parent nodes. even better : if a parent table 
+entry restricts user access or writability, new sub entries respect those bounds. in the leaf_entry bit
+
+omfg my leaf entry addition was missing the data_phys addition so it was not being added.
+leaf_entry = (data_phys&PTE_ADDR_MASK)|PTE_PRESENT; added to add data_phys and safely mask it.
+
+my paging.c bootstrap for the higher half kernel has left PTE_PRESENT | PTE_WRITABLE but with NXE on, this would leave
+.text as writable and the others as executable, which means there could be a heap or buffer overflow attack.
+
+in new_tree in paging, the RAM_FLAGS is set to 0x3ull, which is PTE_PRESENT|PTE_WRITABLE
+ugh linker.ld wants the symbols inside the braces and omfg i got an error simply because of a whitespace!
+
+The HHDM direct map does not need to be executable. If the physical memory frames belonging to the kernel's .text and 
+.rodata sections are mapped as writable via the HHDM alias, a bad pointer (or attack) could overwrite kernel code.
+I cannot simply map regions directly with RAM_FLAGS
+
+trampoline still uses RAM_FLAGS (0x3), which is writable with NX clear. That leaves a writable, executable-capable 
+mapping. separating its writable preparation phase from its executable phase. MMIO_FLAGS doesn't include NX. LAPIC and 
+VGA mappings therefore remain writable and executable-capable. Adding NX to those mappings if execution from MMIO is not
+intended. There is zero reason for device registers (like the Local APIC memory-mapped I/O region or the VGA text buffer
+at 0xB8000) to be executable
+
+I made it init with TRAMPOLINE_INIT_FLAGS -> present, writeable, non executable. now prolly in the lapic code where I
+send SIPI I will re map it ig for the APs. W^X semantics are a nightmare.

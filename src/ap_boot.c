@@ -10,11 +10,24 @@
 #include "../include/display.h"
 #include "../include/lapic.h"
 #include "../include/legacy.h"
+#include "../include/paging.h"
 
 #define MB2_TAG_END       0u
 #define MB2_TAG_ACPI_OLD 14u
 #define MB2_TAG_ACPI_NEW 15u
-
+#define PAGE_SIZE 4096ull
+#define TWO_MIB 0x200000ull
+#define CANONICAL_LIMIT (1ull << 47)
+#define ADDRESS_MASK 0x000FFFFFFFFFF000ull
+#define TABLE_FLAGS 0x3ull
+#define RAM_FLAGS 0x3ull
+#define VGA_ADDRESS 0xB8000ull
+#define FLAG_PRESENT 0x1ull
+#define FLAG_WRITABLE 0x2ull
+#define FLAG_USER 0x4ull
+#define FLAG_HUGE 0x80ull
+#define FLAG_NX (1ULL << 63)
+#define MMIO_FLAGS (0x1Bull | FLAG_NX)
 #define IA32_APIC_BASE_MSR 0x1bu
 #define APIC_BASE_ADDRESS_MASK 0x0000000ffffff000ULL
 
@@ -682,14 +695,12 @@ static void ap_kernel_entry(uint32_t apic_id)
     sched_idle_loop();
 }
 
-int ap_start_all(const struct ap_boot_plan *plan){
+int ap_start_all(const struct ap_boot_plan *plan) {
     if (plan == 0 || plan->ap_count == 0)
         return 1;
 
-    if (hhdm_offset != HHDM_BASE ||
-        plan->trampoline_phys == 0 ||
-        plan->lapic_phys == 0 ||
-        (plan->trampoline_phys >> 12) > 255)
+    if (hhdm_offset != HHDM_BASE || plan->trampoline_phys == 0 ||
+        plan->lapic_phys == 0 || (plan->trampoline_phys >> 12) > 255)
         return 0;
 
     uint64_t cr3;
@@ -699,26 +710,49 @@ int ap_start_all(const struct ap_boot_plan *plan){
     if (cr3 > 0xffffffffULL)
         return 0;
 
-    volatile struct ap_trampoline_params *params =(volatile struct ap_trampoline_params *)(uintptr_t)(plan->trampoline_phys + AP_TRAMPOLINE_PARAMS_OFFSET);
     for (uint32_t i = 0; i < plan->ap_count; i++) {
         uint32_t target = plan->apic_ids[i];
         if (target > 255)
             return 0;
+
+        struct percpu *p = percpu_by_apic_id(target);
+        if (p == 0)
+            return 0;
+
         uint64_t stack_phys = buddy_alloc_order(AP_STACK_ORDER);
         if (stack_phys == 0)
             return 0;
-        uint64_t stack_top =(uint64_t)(uintptr_t)phys_to_virt(stack_phys + AP_STACK_BYTES);
+
+        uint64_t stack_top = (uint64_t)(uintptr_t)phys_to_virt(stack_phys + AP_STACK_BYTES);
+
+        // 1. Make trampoline Writable + Non-Executable (RW+NX) to write parameters
+        if (!vm_set_flags_local(cr3, plan->trampoline_phys, FLAG_WRITABLE | FLAG_NX, 0)) {
+            buddy_free_order(stack_phys, AP_STACK_ORDER);
+            return 0;
+        }
+
+        volatile struct ap_trampoline_params *params =
+            (volatile struct ap_trampoline_params *)(uintptr_t)(plan->trampoline_phys + AP_TRAMPOLINE_PARAMS_OFFSET);
+
         params->trampoline_phys = (uint32_t)plan->trampoline_phys;
         params->cr3_phys = (uint32_t)cr3;
         params->stack_virt_top = stack_top;
-        params->entry_virt =(uint64_t)(uintptr_t)ap_kernel_entry;
+        params->entry_virt = (uint64_t)(uintptr_t)ap_kernel_entry;
         params->apic_id = target;
         params->reserved = 0;
-        struct percpu *p = percpu_by_apic_id(target);
+
         p->boot_stack_base = phys_to_virt(stack_phys);
         p->boot_stack_size = AP_STACK_BYTES;
         atomic_thread_fence(memory_order_release);
-        uint32_t previous =atomic_load_explicit(&ap_online_count,memory_order_acquire);
+
+        // 2. Make trampoline Read-Only + Executable (RO+X) right before startup
+        if (!vm_set_flags_local(cr3, plan->trampoline_phys, 0, FLAG_WRITABLE | FLAG_NX)) {
+            buddy_free_order(stack_phys, AP_STACK_ORDER);
+            return 0;
+        }
+
+        uint32_t previous = atomic_load_explicit(&ap_online_count, memory_order_acquire);
+
         /* INIT assert, delay, INIT deassert, then SIPI. */
         if (!lapic_send_ipi(target, 0x0000c500u))
             return 0;
@@ -730,23 +764,22 @@ int ap_start_all(const struct ap_boot_plan *plan){
 
         pit_delay_us(200u);
 
-        uint32_t sipi =
-            0x00004600u | (uint32_t)(plan->trampoline_phys >> 12);
+        uint32_t sipi = 0x00004600u | (uint32_t)(plan->trampoline_phys >> 12);
 
         if (!lapic_send_ipi(target, sipi))
             return 0;
 
         pit_delay_us(200u);
 
-        /* Send the customary second SIPI if the first did not bring it online. */
-        if (atomic_load_explicit(&ap_online_count,
-                                 memory_order_acquire) == previous) {
+        if (atomic_load_explicit(&ap_online_count, memory_order_acquire) == previous) {
             if (!lapic_send_ipi(target, sipi))
                 return 0;
         }
 
         if (!ap_wait_online(previous))
             return 0;
+
+        pit_delay_us(100u);
     }
 
     return 1;

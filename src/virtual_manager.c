@@ -247,6 +247,9 @@ enum vm_map_status vm_map(uint64_t root_phys, uintptr_t virt_addr, uint64_t flag
     if (!(flags & VM_READ) || (flags & ~(VM_READ | VM_WRITE | VM_USER | VM_EXEC)))
         return VM_MAP_BAD_FLAGS;
 
+    if ((flags & VM_WRITE) && (flags & VM_EXEC))
+        return VM_MAP_BAD_FLAGS;
+
     lock_flags = spin_lock_irqsave(&map_lock);
     walk = vm_translate_unlocked(root_phys, virt_addr, &existing_phys, &existing_flags);
 
@@ -404,10 +407,12 @@ enum vm_map_status vm_map(uint64_t root_phys, uintptr_t virt_addr, uint64_t flag
         goto fail_locked;
     }
 
-    table_entry_flags = PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+    table_entry_flags = PTE_PRESENT | PTE_WRITABLE;
+    if (flags & VM_USER) {
+        table_entry_flags |= PTE_USER;
+    }
 
-    leaf_entry = PTE_PRESENT;
-
+    leaf_entry = (data_phys & PTE_ADDR_MASK) | PTE_PRESENT;
     if (flags & VM_WRITE)
         leaf_entry |= PTE_WRITABLE;
 

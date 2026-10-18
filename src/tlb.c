@@ -12,6 +12,7 @@
 
 static uint64_t tlb_generation;
 static uint32_t tlb_ready;
+static uint32_t tlb_invpcid_supported;
 
 static uint32_t shootdown_next_ticket;
 static uint32_t shootdown_serving_ticket;
@@ -28,7 +29,7 @@ static void tlb_irq_restore(uint64_t flags) {
         __asm__ volatile("sti" ::: "memory");
 }
 
-static int tlb_has_invpcid(void) {
+static uint32_t tlb_has_invpcid(void) {
     uint32_t eax = 0, ebx, ecx = 0, edx;
 
     __asm__ volatile("cpuid"
@@ -45,11 +46,11 @@ static int tlb_has_invpcid(void) {
         : "+a"(eax), "=b"(ebx), "+c"(ecx), "=d"(edx)
         :: "memory");
 
-    return (ebx & (1u << 10)) != 0;
+    return (ebx & (1u << 10)) != 0 ? 1u : 0u;
 }
 
 static void tlb_flush_local_all(void) {
-    if (tlb_has_invpcid()) {
+    if (__atomic_load_n(&tlb_invpcid_supported, __ATOMIC_RELAXED)) {
         struct invpcid_desc {
             uint64_t pcid;
             uint64_t address;
@@ -137,6 +138,8 @@ int tlb_init(void) {
     if (__atomic_load_n(&tlb_ready, __ATOMIC_ACQUIRE))
         return tlb_cpu_online();
 
+    __atomic_store_n(&tlb_invpcid_supported, tlb_has_invpcid(), __ATOMIC_RELAXED);
+
     if (!irq_register(TLB_SHOOTDOWN_VECTOR, tlb_ipi_handler))
         return 0;
 
@@ -158,15 +161,11 @@ int tlb_cpu_online(void) {
 
     uint64_t flags = tlb_irq_save();
 
+    __atomic_store_n(&cpu->tlb_ack_generation, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&cpu->tlb_online, 1, __ATOMIC_SEQ_CST);
+
     tlb_flush_local_all();
-
-    uint64_t generation =
-        __atomic_load_n(&tlb_generation, __ATOMIC_ACQUIRE);
-
-    __atomic_store_n(&cpu->tlb_ack_generation,
-                     generation, __ATOMIC_RELEASE);
-
-    __atomic_store_n(&cpu->tlb_online, 1, __ATOMIC_RELEASE);
+    tlb_service_pending(cpu);
 
     tlb_irq_restore(flags);
     return 1;
@@ -207,7 +206,7 @@ void tlb_shootdown(void) {
     uint32_t ticket = tlb_shootdown_gate_acquire();
 
     uint64_t generation = __atomic_add_fetch(
-        &tlb_generation, 1, __ATOMIC_ACQ_REL);
+        &tlb_generation, 1, __ATOMIC_SEQ_CST);
 
     uint32_t count = percpu_count();
 
@@ -215,7 +214,7 @@ void tlb_shootdown(void) {
         struct percpu *cpu = percpu_by_cpu_id(i);
 
         if (!cpu || cpu == self ||
-            !__atomic_load_n(&cpu->tlb_online, __ATOMIC_ACQUIRE))
+            !__atomic_load_n(&cpu->tlb_online, __ATOMIC_SEQ_CST))
             continue;
 
         while (!lapic_send_ipi(cpu->apic_id, TLB_SHOOTDOWN_VECTOR))
@@ -231,7 +230,7 @@ void tlb_shootdown(void) {
             struct percpu *cpu = percpu_by_cpu_id(i);
 
             if (!cpu ||
-                !__atomic_load_n(&cpu->tlb_online, __ATOMIC_ACQUIRE))
+                !__atomic_load_n(&cpu->tlb_online, __ATOMIC_SEQ_CST))
                 continue;
 
             if (__atomic_load_n(&cpu->tlb_ack_generation,

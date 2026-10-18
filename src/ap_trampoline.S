@@ -73,7 +73,7 @@ ap_tramp_pm32:
 
     mov ecx, 0xC0000080          /* IA32_EFER */
     rdmsr
-    or eax, 1 << 8              /* EFER.LME */
+    or eax, (1 << 8) | (1 << 11)              /* EFER.LME|EFER.NXE */
     wrmsr
     /* Prepare the far pointer before paging starts. */
     mov eax, ebp
