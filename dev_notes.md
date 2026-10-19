@@ -1041,4 +1041,51 @@ Because of this, the execution flow for dropping into Ring 3 must be strictly at
 - swapgs: Switch GS base to user mode.
 - iretq: Atomically load the new RIP, CS, RSP, SS, and restore IF from the pushed RFLAGS as it enters Ring 3.
 
-I MADE THE TEST GET A PAGE FAULT AND THE ERROR CONFIRMED USER MODE.
+I MADE THE TEST GET A PAGE FAULT AND THE ERROR CONFIRMED USER MODE. CPL3 confirmed
+
+# Syscall and sysret
+
+have to enable syscalls with EFER.SCE
+
+Syscall is a fast privilege switch with no stack change and no pushes:
+
+It saves the return address in rcx and RFLAGS in r11.
+It loads CS and SS from STAR, clears the RFLAGS bits listed in FMASK, and jumps to LSTAR.
+It leaves RSP and GS alone, so the entry code has to switch stacks and run swapgs itself.
+
+Setup on every core:
+
+EFER.SCE (bit 0) set.
+STAR (0xC0000081): bits 47:32 = 0x08 (kernel CS; SS is +8), bits 63:48 = 0x10 (the user sysret base; SS = +8, CS = +16).
+LSTAR (0xC0000082) = entry address.
+FMASK (0xC0000084) = at least IF, DF, TF and AC, so the entry runs with interrupts off and a clean direction flag.
+
+The entry stub:
+
+swapgs.
+Save the user RSP in a scratch slot in the per-CPU struct and load the kernel stack from the per-CPU tss.rsp[0], which 
+the scheduler already keeps current.
+Push SS, user RSP, R11 (RFLAGS), CS and RCX (RIP) to build an interrupt-shaped frame, then push the registers, so the 
+existing struct interrupt_frame and dispatch code work for both paths.
+sti, then call a syscall_dispatch(frame) with the number in rax and arguments in rdi, rsi, rdx, r10, r8, r9 (r10 
+because rcx is gone).
+Return with sysretq, after interrupts are off, registers are restored, and the user RSP is back. The order is: restore 
+registers, mov rsp to user, swapgs, sysretq. If the return rcx isn’t a canonical address, return via iretq instead, 
+because sysretq with a non-canonical rcx faults in ring 0
+
+syscall_init runs on every core, so the BSP and each AP call it after their GDT and per-CPU setup. It turns on EFER.SCE 
+and sets STAR
+(kernel CS base 0x08 in bits 47:32, so SS is 0x10; sysret base 0x10 in bits 63:48, so user SS is 0x18|3 and user CS 
+0x20|3), LSTAR to syscall_entry, and FMASK to clear IF, DF, TF, AC, IOPL and NT on entry.
+syscall_dispatch handles three calls for now. exit never returns, yield calls schedule, and 500 prints rdi as a number,
+which lets me test the path without reading user memory. A write syscall waits for copy_from_user, since a kernel 
+read of an unmapped user address would panic. Unknown numbers return -38 (ENOSYS).
+
+The syscall entry. The CPU has already put the user RIP in rcx and RFLAGS in r11 and loaded kernel CS/SS, but it leaves
+RSP and GS alone. The stub runs swapgs, parks the user RSP in the per-CPU scratch slot, and loads the thread's kernel 
+stack from tss.rsp[0]
+
+The return takes the fast path (sysretq) only if the saved RIP is canonical and the saved CS is 0x23. Otherwise it 
+returns through iretq, so a handler that rewrites the frame, such as a future exec, still works. A sysretq with a 
+non canonical RCX would fault in ring 0. Interrupts stay off from the cli to the sysretq, and the user RSP is loaded 
+just before swapgs

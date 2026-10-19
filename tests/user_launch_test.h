@@ -94,14 +94,19 @@ static inline void launch_user_test(void) {
     launch_map_page(uas->pml4_phys, user_code_vaddr, code_phys, LAUNCH_P | LAUNCH_U);
     launch_map_page(uas->pml4_phys, user_stack_top - 0x1000, stack_phys, LAUNCH_P | LAUNCH_W | LAUNCH_U | LAUNCH_NX);
 
+    static const uint8_t user_prog[] = {
+        0xB8, 0xF4, 0x01, 0x00, 0x00,
+        0xBF, 0x2A, 0x00, 0x00, 0x00,
+        0x0F, 0x05,
+        0xB8, 0x3C, 0x00, 0x00, 0x00,
+        0x31, 0xFF,
+        0x0F, 0x05
+    };
+
     volatile uint8_t *code_ptr = (volatile uint8_t *)phys_to_virt(code_phys);
-    code_ptr[0] = 0x8B;
-    code_ptr[1] = 0x04;
-    code_ptr[2] = 0x25;
-    code_ptr[3] = 0x00;
-    code_ptr[4] = 0x00;
-    code_ptr[5] = 0x00;
-    code_ptr[6] = 0x00;
+    for (uint32_t i = 0; i < sizeof(user_prog); i++)
+        code_ptr[i] = user_prog[i];
+
     print("[KERNEL] Switching address space and jumping to user mode via iretq...\n");
 
     __asm__ volatile ("cli" ::: "memory");
@@ -123,8 +128,4 @@ static inline void launch_user_test(void) {
     __builtin_unreachable();
 }
 
-static void launch_user_thread(void *arg) {
-    (void)arg;
-    launch_user_test();
-}
 #endif

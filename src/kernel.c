@@ -16,6 +16,7 @@
 #include "../include/thread.h"
 #include "../include/vmalloc.h"
 #include "../include/address_space.h"
+#include "../include/syscall.h"
 #include "../tests/user_launch_test.h"
 
 #define PAGE_SIZE 4096ull
@@ -230,6 +231,7 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
     //set tss and gdt
     percpu_gdt_setup(percpu_self());
+    syscall_init();
     struct percpu *p = percpu_self();
     p->boot_stack_base = &kernel_stack_bottom;
     p->boot_stack_size = (uintptr_t)&kernel_stack_top - (uintptr_t)&kernel_stack_bottom;

@@ -30,6 +30,7 @@ struct percpu {
     uint64_t gdt[7] __attribute__((aligned(64)));
     struct tss tss __attribute__((aligned(64)));
     struct address_space *curr_as;
+    uint64_t user_rsp_scratch;
 } __attribute__((aligned(64)));
 
 int percpu_init(uint32_t bsp_apic_id, const uint32_t *ap_apic_ids, uint32_t ap_count);
