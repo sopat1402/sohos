@@ -2,6 +2,7 @@
 #define THREAD_H
 
 #include <stdint.h>
+#include "address_space.h"
 
 #define THREAD_STACK_ORDER 3u
 #define THREAD_NAME_LEN 16u
@@ -31,6 +32,7 @@ struct thread {
     uint32_t on_cpu;
     int32_t exit_code;
     uint8_t wake_pending;
+    struct address_space *as;
     char name[THREAD_NAME_LEN];
 };
 

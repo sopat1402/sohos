@@ -2,7 +2,7 @@
 #define PERCPU_H
 
 #include <stdint.h>
-
+#include "address_space.h"
 #define IA32_GS_BASE_MSR 0xC0000101u
 
 struct tss {
@@ -29,6 +29,7 @@ struct percpu {
     uint64_t boot_stack_size;
     uint64_t gdt[7] __attribute__((aligned(64)));
     struct tss tss __attribute__((aligned(64)));
+    struct address_space *curr_as;
 } __attribute__((aligned(64)));
 
 int percpu_init(uint32_t bsp_apic_id, const uint32_t *ap_apic_ids, uint32_t ap_count);

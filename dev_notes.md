@@ -973,3 +973,49 @@ at 0xB8000) to be executable
 
 I made it init with TRAMPOLINE_INIT_FLAGS -> present, writeable, non executable. now prolly in the lapic code where I
 send SIPI I will re map it ig for the APs. W^X semantics are a nightmare.
+
+# Address spaces
+
+## the struct
+
+each thread needs an address space so I will have a struct allocated and have a pml4 tree for it. it needs a cpu mask
+to show which cpus are accessing it. then tlb shootdown won't be global. will copy bits 256 onwards from the kernel and
+0 to 255 is for the data.
+
+This is obvi key to userspace stuff because this allows threads to use virtual addresses from while still being in
+different physical memory mappings.
+Slots 256–511 are the kernel half (0xFFFF8000+). This is the higher-half kernel, direct map and vmalloc (384)
+
+The pointers must be copied and not the slots themselves. if a kernel-half slot is empty at clone time and later gets a 
+PDPT (say the first vmalloc call creates the PDPT under slot 384), the earlier clones never see it. The kernel then 
+faults on its own heap, but only in some processes and only sometimes. I can prolly fix this by pre populating at boot
+with empty pdpt so that no kernel slot is made that later threads can't see.
+
+My as_create is just allocing a page, copying bytes 250 onwards and zeroing the ones before it.
+as_get is adding the refcount and returning as. af_put is decreasing the refcount and calling af_destroy if it is zero
+after the decrement.
+as_free_level is recursive to clear leaves and then parents. It is called by as_destroy
+
+Refcount per frame or do not free flag needed for MMIO mappings or shared pages.
+
+## scheduler integration
+
+sched_adopt_boot frame sets the curr_as to kernel_as and sched_finish_switch accesses the incoming thread using the per
+cpu. it is just checking if the as is the same to prevent unnecessary cr3 change. then it switches as needed.
+
+## targeted tlb shootdown
+
+only user half mappings can use targeted tlb shootdowns but all kernel side ones must use the globaal shootdown.
+the cpu mask is a bitmask so I can just extract the cpu from that and send ipi targeted.
+
+## Page fault handling
+
+using the code and the faulting addr, i can find if it is user or kernel mode. then kernel fault does a dump and panics
+but user mode will check if it is valid as a process or if a kill for the process is needed.
+Vector 14 needs to be hooked up.
+
+CR2 has the faulting address and a bitmask (error code pushed on the stack) tells me why the error happened.
+bit 2 needs to be looked at for user/supervisor.
+
+don’t have a region list yet, so the handler can’t tell a legitimate access from a stray pointer. I’m skipping demand 
+paging for now. I will map the ELF segments and the stack eagerly at creation and treat every user fault as fatal.

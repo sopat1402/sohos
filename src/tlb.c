@@ -3,12 +3,12 @@
 #include "../include/lapic.h"
 #include "../include/percpu.h"
 #include "../include/tlb.h"
+#include "../include/address_space.h"
 
 #define TLB_SHOOTDOWN_VECTOR 0xF2u
 
 #define CR4_PGE   (1ULL << 7)
 #define CR4_PCIDE (1ULL << 17)
-#define RFLAGS_IF (1ULL << 9)
 
 static uint64_t tlb_generation;
 static uint32_t tlb_ready;
@@ -227,6 +227,80 @@ void tlb_shootdown(void) {
         int complete = 1;
 
         for (uint32_t i = 0; i < count; i++) {
+            struct percpu *cpu = percpu_by_cpu_id(i);
+
+            if (!cpu ||
+                !__atomic_load_n(&cpu->tlb_online, __ATOMIC_SEQ_CST))
+                continue;
+
+            if (__atomic_load_n(&cpu->tlb_ack_generation,
+                                __ATOMIC_ACQUIRE) < generation) {
+                complete = 0;
+                break;
+            }
+        }
+
+        if (complete)
+            break;
+
+        __asm__ volatile("pause");
+    }
+
+    tlb_shootdown_gate_release(ticket);
+}
+
+void tlb_shootdown_as(struct address_space *as) {
+    if (!as || as == &kernel_as) {
+        tlb_shootdown();
+        return;
+    }
+
+    struct percpu *self = percpu_self();
+
+    uint64_t entry_flags;
+    __asm__ volatile("pushfq; popq %0" : "=r"(entry_flags) :: "memory");
+
+    if (!self || self->self != self ||
+        !__atomic_load_n(&self->tlb_online, __ATOMIC_ACQUIRE) ||
+        !__atomic_load_n(&tlb_ready, __ATOMIC_ACQUIRE) ||
+        !(entry_flags & RFLAGS_IF)) {
+        __asm__ volatile("cli" ::: "memory");
+        for (;;)
+            __asm__ volatile("hlt");
+    }
+
+    uint32_t ticket = tlb_shootdown_gate_acquire();
+
+    uint64_t generation = __atomic_add_fetch(
+        &tlb_generation, 1, __ATOMIC_SEQ_CST);
+
+    uint64_t mask = __atomic_load_n(&as->cpu_mask, __ATOMIC_ACQUIRE);
+    uint32_t count = percpu_count();
+
+    for (uint32_t i = 0; i < count && i < 64; i++) {
+        if (!(mask & (1ULL << i)))
+            continue;
+
+        struct percpu *cpu = percpu_by_cpu_id(i);
+
+        if (!cpu || cpu == self ||
+            !__atomic_load_n(&cpu->tlb_online, __ATOMIC_SEQ_CST))
+            continue;
+
+        while (!lapic_send_ipi(cpu->apic_id, TLB_SHOOTDOWN_VECTOR))
+            __asm__ volatile("pause");
+    }
+
+    tlb_service_pending(self);
+
+    for (;;) {
+        int complete = 1;
+        uint64_t current_mask = __atomic_load_n(&as->cpu_mask, __ATOMIC_ACQUIRE);
+
+        for (uint32_t i = 0; i < count && i < 64; i++) {
+            if (!(current_mask & (1ULL << i)))
+                continue;
+
             struct percpu *cpu = percpu_by_cpu_id(i);
 
             if (!cpu ||

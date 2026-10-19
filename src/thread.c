@@ -33,6 +33,9 @@ void thread_free(struct thread *t) {
         return;
     if (t->stack_phys != 0)
         buddy_free_order(t->stack_phys, THREAD_STACK_ORDER);
+    if (t->as) {
+        as_put(t->as);
+    }
     kfree(t);
 }
 
@@ -67,6 +70,7 @@ struct thread *thread_create_on(const char *name, thread_fn fn, void *arg, uint3
     t->stack_size = size;
     t->id = thread_alloc_id();
     t->state = THREAD_NEW;
+    t->as = &kernel_as;
     thread_set_name(t, name);
     if (!sched_enqueue(t, cpu)) {
         thread_free(t);

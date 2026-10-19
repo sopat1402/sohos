@@ -8,6 +8,7 @@
 #include "../include/spinlock.h"
 #include "../include/display.h"
 #include "../include/sleep.h"
+#include "../include/address_space.h"
 
 #define SCHED_IPI_COMMAND (0x4000u | SCHED_IPI_VECTOR)
 
@@ -123,6 +124,9 @@ int sched_adopt_boot_thread(void) {
     thread_set_name(t, "idle");
     rq->idle = t;
     p->current_thread = t;
+    t->as = &kernel_as;
+    p->curr_as = &kernel_as;
+    __atomic_fetch_or(&kernel_as.cpu_mask, 1ull << p->cpu_id, __ATOMIC_SEQ_CST);
     __atomic_store_n(&rq->online, 1, __ATOMIC_RELEASE);
 
     irq_restore(flags);
@@ -132,6 +136,19 @@ int sched_adopt_boot_thread(void) {
 void sched_finish_switch(struct thread *prev) {
     if (prev == 0)
         return;
+
+    struct percpu *p = percpu_self();
+    struct thread *next = p->current_thread;
+    if (prev->as != next->as) {
+        if (prev->as) {
+            __atomic_fetch_and(&prev->as->cpu_mask, ~(1ULL << p->cpu_id), __ATOMIC_ACQ_REL);
+        }
+        if (next->as) {
+            __atomic_fetch_or(&next->as->cpu_mask, 1ULL << p->cpu_id, __ATOMIC_ACQ_REL);
+        }
+        p->curr_as = next->as;
+        __asm__ volatile("mov %0, %%cr3" : : "r" (next->as->pml4_phys) : "memory");
+    }
 
     struct runqueue *rq = &rqs[prev->cpu];
     uint64_t flags = spin_lock_irqsave(&rq->lock);
@@ -268,6 +285,7 @@ __attribute__((noreturn)) void sched_idle_loop(void) {
     for (;;) {
         __asm__ volatile ("cli" : : : "memory");
         if (__atomic_load_n(&rq->nr_ready, __ATOMIC_ACQUIRE) > 0) {
+            __asm__ volatile ("sti" : : : "memory"); // <--- Enable interrupts before scheduling!
             schedule();
             continue;
         }

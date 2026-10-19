@@ -703,11 +703,8 @@ int ap_start_all(const struct ap_boot_plan *plan) {
         plan->lapic_phys == 0 || (plan->trampoline_phys >> 12) > 255)
         return 0;
 
-    uint64_t cr3;
-    __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
-    cr3 &= ~0xfffULL;
-
-    if (cr3 > 0xffffffffULL)
+    uint64_t cr3 = kernel_as.pml4_phys;
+    if (cr3 == 0 || cr3 > 0xffffffffULL)
         return 0;
 
     for (uint32_t i = 0; i < plan->ap_count; i++) {

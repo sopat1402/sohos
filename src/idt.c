@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include "../include/idt.h"
 #include "../include/display.h"
+#include "../include/thread.h"
  
 #define KERNEL_CODE_SELECTOR 0x08
 #define GATE_INTERRUPT 0x8E
@@ -39,7 +40,13 @@ static const char *exception_names[32] = {
     "Reserved", "Reserved", "Reserved", "Reserved",
     "Hypervisor injection", "VMM communication", "Security", "Reserved"
 };
- 
+__attribute__((noreturn)) static void panic(const char *message) {
+    __asm__ volatile ("cli");
+    print("\nSCHED PANIC: ");
+    print(message);
+    for (;;)
+        __asm__ volatile ("hlt");
+}
 static void idt_set_gate(int vector, uint64_t handler, uint8_t ist, uint8_t type_attr){
     idt[vector].offset_low=(uint16_t)(handler&0xFFFF);
     idt[vector].selector=KERNEL_CODE_SELECTOR;
@@ -72,18 +79,29 @@ static void exception_handler(struct interrupt_frame *frame){
     print(" RFLAGS=0x");
     print_hex(frame->rflags);
  
-    if (frame->vector==14){
-        print("\nCR2=0x");
+     if (frame->vector == 14) {
+        uint64_t cr2;
+        __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+        int is_present = (frame->error & 1) != 0;
+        int is_write   = (frame->error & 2) != 0;
+        int is_user    = (frame->error & 4) != 0;
+        print("\nPage Fault: CR2=0x");
         print_hex(cr2);
-        print((frame->error&1) ? " protection" : " not-present");
-        print((frame->error&2) ? " write" : " read");
-        print((frame->error&4) ? " user" : " supervisor");
-        if (frame->error&8)
-            print(" reserved-bit");
-        if (frame->error&16)
-            print(" instruction-fetch");
+        print(is_present ? " [protection]" : " [not-present]");
+        print(is_write ? " [write]" : " [read]");
+        print(is_user ? " [user]\n" : " [supervisor]\n");
+        if (!is_user) {
+            panic("Kernel page fault");
+        } else {
+            if (cr2 < 0x1000 || cr2 >= 0x0000800000000000ULL) {
+                print("[USER] Invalid memory access, killing thread.\n");
+                thread_exit();
+            } else {
+                print("[USER] Demand paging / stack expansion needed.\n");
+                thread_exit();
+            }
+        }
     }
- 
     if (frame->vector==11 && (frame->error&2)){
         print("\nno handler for vector ");
         print_uint(frame->error>>3);

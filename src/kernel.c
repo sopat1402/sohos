@@ -15,7 +15,8 @@
 #include "../include/sched.h"
 #include "../include/thread.h"
 #include "../include/vmalloc.h"
-#include "../tests/nx_test.h"
+#include "../include/address_space.h"
+#include "../tests/isolation_test.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -232,6 +233,10 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
     struct percpu *p = percpu_self();
     p->boot_stack_base = &kernel_stack_bottom;
     p->boot_stack_size = (uintptr_t)&kernel_stack_top - (uintptr_t)&kernel_stack_bottom;
+
+    //initialise kernel_as on the BSP
+    kernel_as_init();
+
     //boot scheduler and adopt thread
     if (!sched_init()) {
         print("[error] Failed to initialise scheduler");
@@ -270,5 +275,5 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
     //execute sti
     __asm__ volatile("sti" ::: "memory");
-    nx_test_run();
+    run_isolation_test();
 }
