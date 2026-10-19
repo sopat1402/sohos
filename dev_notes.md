@@ -1019,3 +1019,26 @@ bit 2 needs to be looked at for user/supervisor.
 
 don’t have a region list yet, so the handler can’t tell a legitimate access from a stray pointer. I’m skipping demand 
 paging for now. I will map the ELF segments and the stack eagerly at creation and treat every user fault as fatal.
+
+# User mode - ring 3
+
+GDT layout is already correct.
+parcpu attach now writes to the msr again to make the kernel gs base 0. swapgs immediately before the iretq will not
+go through isr commmon's exit.
+
+The CS test in isr_common can’t be trusted for vectors that can arrive at any instruction, including the few between 
+the test and the swapgs NMI (2), double fault (8) and machine check (18). For these i'll ask the 
+hardware instead. A user GS base is below 0x0000800000000000, while the percpu pointer is a higher-half address with 
+the top bit set. Going to add a second common path and point those three vectors at it
+
+f interrupts were left enabled between swapgs and iretq, a timer tick arriving in that microsecond window would hit 
+kernel code (CS is still kernel CS), skip swapgs in isr_common, and run the entire interrupt handler using the user's 
+GS base instead of the per-CPU pointer—leading to an immediate, silent memory corruption or crash.
+
+Because of this, the execution flow for dropping into Ring 3 must be strictly atomic:
+
+- cli: Turn off interrupts so no asynchronous trap can sneak in.
+- swapgs: Switch GS base to user mode.
+- iretq: Atomically load the new RIP, CS, RSP, SS, and restore IF from the pushed RFLAGS as it enters Ring 3.
+
+I MADE THE TEST GET A PAGE FAULT AND THE ERROR CONFIRMED USER MODE.

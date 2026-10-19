@@ -16,7 +16,7 @@
 #include "../include/thread.h"
 #include "../include/vmalloc.h"
 #include "../include/address_space.h"
-#include "../tests/isolation_test.h"
+#include "../tests/user_launch_test.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -275,5 +275,6 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
     //execute sti
     __asm__ volatile("sti" ::: "memory");
-    run_isolation_test();
+
+    launch_user_test();
 }

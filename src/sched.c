@@ -133,22 +133,31 @@ int sched_adopt_boot_thread(void) {
     return 1;
 }
 
-void sched_finish_switch(struct thread *prev) {
-    if (prev == 0)
+void as_switch(struct address_space *next) {
+    struct percpu *p = percpu_self();
+    struct address_space *prev = p->curr_as;
+
+    if (next == NULL)
+        next = &kernel_as;
+    if (prev == next)
         return;
 
+    uint64_t bit = 1ull << p->cpu_id;
+
+    __atomic_fetch_or(&next->cpu_mask, bit, __ATOMIC_SEQ_CST);
+    __asm__ volatile ("mov %0, %%cr3" :: "r"(next->pml4_phys) : "memory");
+    p->curr_as = next;
+
+    if (prev != NULL)
+        __atomic_fetch_and(&prev->cpu_mask, ~bit, __ATOMIC_RELEASE);
+}
+
+void sched_finish_switch(struct thread *prev) {
     struct percpu *p = percpu_self();
-    struct thread *next = p->current_thread;
-    if (prev->as != next->as) {
-        if (prev->as) {
-            __atomic_fetch_and(&prev->as->cpu_mask, ~(1ULL << p->cpu_id), __ATOMIC_ACQ_REL);
-        }
-        if (next->as) {
-            __atomic_fetch_or(&next->as->cpu_mask, 1ULL << p->cpu_id, __ATOMIC_ACQ_REL);
-        }
-        p->curr_as = next->as;
-        __asm__ volatile("mov %0, %%cr3" : : "r" (next->as->pml4_phys) : "memory");
-    }
+    as_switch(((struct thread*)p->current_thread)->as);
+
+    if (prev == 0)
+        return;
 
     struct runqueue *rq = &rqs[prev->cpu];
     uint64_t flags = spin_lock_irqsave(&rq->lock);

@@ -7,6 +7,8 @@
 static struct percpu *cpus;
 static uint32_t cpu_total;
 
+#define IA32_KERNEL_GS_BASE_MSR 0xC0000102u
+
 static void percpu_wrmsr(uint32_t msr, uint64_t value) {
     uint32_t low = (uint32_t)value;
     uint32_t high = (uint32_t)(value >> 32);
@@ -61,6 +63,7 @@ int percpu_attach(uint32_t apic_id) {
     if (p == 0)
         return 0;
     percpu_wrmsr(IA32_GS_BASE_MSR, (uint64_t)(uintptr_t)p);
+    percpu_wrmsr(IA32_KERNEL_GS_BASE_MSR, 0);
     return 1;
 }
 

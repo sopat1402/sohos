@@ -22,5 +22,6 @@ int sched_prepare_block_current(void);
 int sched_wake_thread(struct thread *t);
 struct thread *switch_to(struct thread *old, struct thread *next);
 void thread_trampoline(void);
+void as_switch(struct address_space *next);
 
 #endif
