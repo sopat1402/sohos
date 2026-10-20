@@ -44,5 +44,6 @@ static inline struct percpu *percpu_self(void) {
     __asm__ volatile ("movq %%gs:0, %0" : "=r"(p));
     return p;
 }
+void cpu_fix_cr0(void);
 
 #endif

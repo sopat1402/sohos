@@ -18,7 +18,8 @@
 #include "../include/address_space.h"
 #include "../include/syscall.h"
 #include "../include/usercpy.h"
-#include "../tests/read_write_test.h"
+#include "../include/process.h"
+#include "../include/tlb.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -57,7 +58,6 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         return;
     }
 
-    print("Checking CPU...\n");
 
     //read acpi and apic
     const void *mbi = phys_to_virt(multiboot_data);
@@ -80,11 +80,6 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("CPUID probe failed\n");
         return;
     }
-    print("CPU vendor: ");
-    print(bsp_cpu.vendor);
-    print("\nBSP APIC ID: ");
-    print_uint(bsp_cpu.bsp_apic_id);
-    print("\n");
     if (!bsp_cpu.has_apic)
         print("CPU reports no Local APIC support\n");
     if (bsp_cpu.has_apic && !bsp_cpu.lapic_enabled)
@@ -118,7 +113,6 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("AP startup unavailable: missing ACPI or APIC support\n");
     }
 
-    print("Loading RAM...\n");
     uint64_t image_phys_start = (uint64_t)(uintptr_t)&__image_phys_start;
     uint64_t image_phys_end   = (uint64_t)(uintptr_t)&__kernel_phys_end;
 
@@ -229,6 +223,10 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("[error] BSP per-CPU attach failed\n");
         return;
     }
+    if (!tlb_init()) {
+        for (;;)
+            __asm__ volatile ("cli\n\thlt");
+    }
     //set tss and gdt
     percpu_gdt_setup(percpu_self());
     struct percpu *p = percpu_self();
@@ -256,16 +254,13 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
     vmalloc_init();
 
     //Start APs
-    print("Starting available CPU cores...\n");
     if (ap_plan_ready) {
         if (!ap_start_all(&ap_plan)) {
             print("[error] AP startup failed\n");
             return;
         }
-
-        print("All MADT APs are online\n");
     }
-
+    cpu_fix_cr0();
     //enable syscalls
     syscall_init();
 
@@ -281,8 +276,8 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
     //execute sti
     __asm__ volatile("sti" ::: "memory");
 
-    struct address_space *as=as_create();
-    struct thread *t = thread_create("sys_test", (thread_fn)run_sys_test, 0);
-    t->as=as;
-    schedule();
+    extern const uint8_t user_hello_start[];
+    extern const uint8_t user_hello_end[];
+    process_create("hello", user_hello_start, (uint64_t)(user_hello_end - user_hello_start));
+    sched_idle_loop();
 }

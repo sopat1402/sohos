@@ -1155,3 +1155,59 @@ this is however proof of SMEP working.
 
 i have to copy its memory into the address space. what memory? the fucking test code itself. Ah isn't that what an elf
 loader does?
+
+# ELF Loader and processes
+
+My tests must be pre compiled hereonafter. Needed an elf loader anyways. Not too many notes for this because the elf
+loader code is conserved and there's no point really wasting time reading a header for an hour.
+
+Just have to check magic, architecture, endianness, 64 bit or 32 bit for the validation.
+then a program header walk from pt_load.
+
+it then reads p_vaddr and p_flags, assigns memory and maps the data into the virtual addresses they ask for.
+then it copies p_filesz (.bss).
+
+here's the magic : #define ELF_MAGIC 0x464C457F // "\x7FELF"
+
+oh wait linux has a filesystem. ig buffer since there's no better choice for how to pass my elf file.
+
+I just need to get a phys pml4, give it to vm_map and then start copying data in. rollbacks were the hard part. Then
+after allocation just a trampoline to call iretq. It also needs to map a stack.
+
+That makes more sense in a process.c and it sounds cooler too to say process_create so now that is in a process.c
+Can't forget the swapgs before iretq to align MSRs. Yayy thread_create does make it runnable. A normal glibc hello
+world won't work and neither will the read_write_test.h it is useless.
+
+gcc -O2 -ffreestanding -fno-pie -fno-stack-protector -mgeneral-regs-only -c tests/hello.c -o tests/hello.o
+ld -static -nostdlib -z max-page-size=4096 -z separate-code -Ttext-segment=0x400000 -e _start -o hello.elf tests/hello.o
+
+hello.elf is the built test to print hello. -mgeneral-regs-only matters because I haven’t set up SSE state for user mode
+, so the compiler must not emit xmm instructions. ld should give an ET_EXEC file, which is what the loader accepts
+
+omfg tlb_cpu_online() is not called anywhere that's why the fucking tlb shootdown would hang. I totally forgot to call
+tlb_init and have lost hours to this little shit
+
+all four cores now show CR0=80010011 and CR4=00300020. WP is on, CD/NW are cleared, and SMEP and SMAP are enabled 
+everywhere. The APs are idle in the normal sti; hlt loop (IF=1). BSP is jerking off it a halt at higher_half_entry.
+higher_half_entry:
+    movabs rax, OFFSET FLAT:kernel_stack_top
+    mov rsp, rax
+    and rsp, -16
+    xor ebp, ebp
+    call kmain
+It's stuck there. Good news is that the TLB bug is gone. OH my fucking god I just had to put sched_idle_loop() at the
+end of kmain to ensure that the bsp never returns. The BSP was walking off the job.
+I also made enable_smep_smap stop spamming success messages I'm on a shitty VGA.
+There was one final bug where my exception handler was corrupting the VGA but now it is fixed and the test worked too.
+
+The ELF loader and process_create load and start a real user program.
+Ring 3 entry, the syscall path, write and read all work.
+SMEP and SMAP are on, and copy_from_user and copy_to_user hold up.
+The exception table recovers kernel faults on bad user pointers, with all four failure cases returning -1
+
+but, a few todos:
+
+vm_map still doesn’t zero its new page-table pages.
+tlb_shootdown() can be dropped from vm_map.
+Any user-mode exception other than a page fault still halts the machine.
+NMI needs its own IST stack before you run untrusted code

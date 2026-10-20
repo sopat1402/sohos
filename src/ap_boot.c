@@ -12,6 +12,8 @@
 #include "../include/legacy.h"
 #include "../include/paging.h"
 #include "../include/syscall.h"
+#include "../include/usercpy.h"
+#include "../include/tlb.h"
 
 #define MB2_TAG_END       0u
 #define MB2_TAG_ACPI_OLD 14u
@@ -686,8 +688,10 @@ static void ap_kernel_entry(uint32_t apic_id)
     percpu_gdt_setup(p);
     setup_ist(p);
     set_tss_rsp0_currthrd();
+    cpu_fix_cr0();
     syscall_init();
-
+    enable_smep_smap();
+    tlb_cpu_online();
     if (!lapic_timer_start(LAPIC_TICK_HZ)) {
         for (;;)
             __asm__ volatile ("cli\n\thlt");

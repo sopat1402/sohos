@@ -57,67 +57,68 @@ static void idt_set_gate(int vector, uint64_t handler, uint8_t ist, uint8_t type
     idt[vector].offset_high=(uint32_t)(handler>>32);
     idt[vector].reserved=0;
 }
- 
-static void exception_handler(struct interrupt_frame *frame){
+
+static void exception_handler(struct interrupt_frame *frame) {
+    if (frame->vector == 14 && !(frame->error & 4)) {
+        uint64_t fixup = search_exception_tables(frame->rip);
+        if (fixup) {
+            frame->rip = fixup;
+            return;
+        }
+    }
+
     uint64_t cr2;
     __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
- 
-    display_set_cursor(19,0);
+
+    display_set_cursor(19, 0);
     print("EXCEPTION ");
     print_uint(frame->vector);
     print(": ");
-    print(frame->vector<32 ? exception_names[frame->vector] : "Unknown");
- 
+    print(frame->vector < 32 ? exception_names[frame->vector] : "Unknown");
+
     print("\nERR=0x");
     print_hex(frame->error);
     print(" RIP=0x");
     print_hex(frame->rip);
     print(" CS=0x");
     print_hex(frame->cs);
- 
+
     print("\nRSP=0x");
     print_hex(frame->rsp);
     print(" RFLAGS=0x");
     print_hex(frame->rflags);
 
     if (frame->vector == 14) {
-        uint64_t cr2;
-        __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
         int is_present = (frame->error & 1) != 0;
-        int is_write   = (frame->error & 2) != 0;
-        int is_user    = (frame->error & 4) != 0;
+        int is_write = (frame->error & 2) != 0;
+        int is_user = (frame->error & 4) != 0;
+
         print("\nPage Fault: CR2=0x");
         print_hex(cr2);
         print(is_present ? " [protection]" : " [not-present]");
         print(is_write ? " [write]" : " [read]");
         print(is_user ? " [user]\n" : " [supervisor]\n");
-        if (!is_user) {
-            uint64_t fixup = search_exception_tables(frame->rip);
-            if (fixup) {
-                frame->rip = fixup;
-                return;
-            }
 
+        if (!is_user)
             panic("Kernel page fault");
-        } else {
-            if (cr2 < 0x1000 || cr2 >= 0x0000800000000000ULL) {
-                print("[USER] Invalid memory access, killing thread.\n");
-                thread_exit();
-            } else {
-                print("[USER] Demand paging / stack expansion needed.\n");
-                thread_exit();
-            }
-        }
+
+        if (cr2 < 0x1000 || cr2 >= 0x0000800000000000ULL)
+            print("[USER] Invalid memory access, killing thread.\n");
+        else
+            print("[USER] Demand paging / stack expansion needed.\n");
+
+        thread_exit();
     }
-    if (frame->vector==11 && (frame->error&2)){
+
+    if (frame->vector == 11 && (frame->error & 2)) {
         print("\nno handler for vector ");
-        print_uint(frame->error>>3);
+        print_uint(frame->error >> 3);
     }
- 
+
     for (;;)
         __asm__ volatile ("cli\n\thlt");
 }
- 
+
 void interrupt_dispatch(struct interrupt_frame *frame);
  
 void interrupt_dispatch(struct interrupt_frame *frame){

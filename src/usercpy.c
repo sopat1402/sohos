@@ -99,14 +99,12 @@ void enable_smep_smap(void) {
 
 	if (has_smep) {
 		cr4 |= (1ULL << 20); // Enable SMEP
-		print("[KERNEL] SMEP supported and enabled.\n");
 	} else {
 		print("[KERNEL] SMEP NOT supported by CPU.\n");
 	}
 
 	if (has_smap) {
 		cr4 |= (1ULL << 21); // Enable SMAP
-		print("[KERNEL] SMAP supported and enabled.\n");
 	} else {
 		print("[KERNEL] SMAP NOT supported by CPU.\n");
 	}

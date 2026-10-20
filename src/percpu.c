@@ -74,3 +74,15 @@ int setup_ist(struct percpu *p){
     p->tss.ist[0]=stack_top_virt;
     return 1;
 }
+
+#define CR0_WP (1ULL << 16)
+#define CR0_NW (1ULL << 29)
+#define CR0_CD (1ULL << 30)
+
+void cpu_fix_cr0(void) {
+    uint64_t cr0;
+    __asm__ volatile ("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~(CR0_CD | CR0_NW);
+    cr0 |= CR0_WP;
+    __asm__ volatile ("mov %0, %%cr0" :: "r"(cr0) : "memory");
+}
