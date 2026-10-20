@@ -63,15 +63,27 @@ int percpu_attach(uint32_t apic_id) {
     if (p == 0)
         return 0;
     percpu_wrmsr(IA32_GS_BASE_MSR, (uint64_t)(uintptr_t)p);
-    percpu_wrmsr(IA32_KERNEL_GS_BASE_MSR, (uint64_t)(uintptr_t)p);
+    percpu_wrmsr(IA32_KERNEL_GS_BASE_MSR, 0);
     return 1;
 }
 
-int setup_ist(struct percpu *p){
-    uint64_t stack_base_phys=buddy_alloc_order(2);
-    if (stack_base_phys==0) return 0;
-    uint64_t stack_top_virt=(uint64_t)(uintptr_t)phys_to_virt(stack_base_phys)+4096*4;
-    p->tss.ist[0]=stack_top_virt;
+#define IST_STACK_ORDER 2u
+
+int setup_ist(struct percpu *p) {
+    uint64_t size = 4096ull << IST_STACK_ORDER;
+
+    uint64_t df_phys = buddy_alloc_order(IST_STACK_ORDER);
+    if (df_phys == 0)
+        return 0;
+
+    uint64_t nmi_phys = buddy_alloc_order(IST_STACK_ORDER);
+    if (nmi_phys == 0) {
+        buddy_free_order(df_phys, IST_STACK_ORDER);
+        return 0;
+    }
+
+    p->tss.ist[0] = (uint64_t)(uintptr_t)phys_to_virt(df_phys) + size;
+    p->tss.ist[1] = (uint64_t)(uintptr_t)phys_to_virt(nmi_phys) + size;
     return 1;
 }
 

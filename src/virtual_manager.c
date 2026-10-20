@@ -454,7 +454,6 @@ enum vm_map_status vm_map(uint64_t root_phys, uintptr_t virt_addr, uint64_t flag
 
 
     spin_unlock_irqrestore(&map_lock, lock_flags);
-    tlb_shootdown();
     for (uint8_t i = needed_now; i < allocated_tables; i++)
         (void)buddy_free_order(new_tables[i], 0);
 

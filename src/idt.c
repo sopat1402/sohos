@@ -110,6 +110,11 @@ static void exception_handler(struct interrupt_frame *frame) {
         thread_exit();
     }
 
+    if ((frame->cs & 3) == 3 && frame->vector < 32 &&
+        frame->vector != 2 && frame->vector != 8 && frame->vector != 18) {
+        thread_exit();
+    }
+
     if (frame->vector == 11 && (frame->error & 2)) {
         print("\nno handler for vector ");
         print_uint(frame->error >> 3);

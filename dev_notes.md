@@ -1205,9 +1205,8 @@ Ring 3 entry, the syscall path, write and read all work.
 SMEP and SMAP are on, and copy_from_user and copy_to_user hold up.
 The exception table recovers kernel faults on bad user pointers, with all four failure cases returning -1
 
-but, a few todos:
+NMI needs its own IST stack
 
-vm_map still doesn’t zero its new page-table pages.
-tlb_shootdown() can be dropped from vm_map.
-Any user-mode exception other than a page fault still halts the machine.
-NMI needs its own IST stack before you run untrusted code
+Ok so I made it pass a leak test. It spawns like 300 process that just exit. Also now after checking vector 14, I check
+if it is a user proc and kill the thread if it is instead of kernel halt. TLB shootdown is now gone from vm_map.
+also percpu_wrmsr(ia32_kernel_gs_base_msr,0) is needed. added.
