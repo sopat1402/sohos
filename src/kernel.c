@@ -17,7 +17,8 @@
 #include "../include/vmalloc.h"
 #include "../include/address_space.h"
 #include "../include/syscall.h"
-#include "../tests/user_launch_test.h"
+#include "../include/usercpy.h"
+#include "../tests/read_write_test.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -228,14 +229,11 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("[error] BSP per-CPU attach failed\n");
         return;
     }
-
     //set tss and gdt
     percpu_gdt_setup(percpu_self());
-    syscall_init();
     struct percpu *p = percpu_self();
     p->boot_stack_base = &kernel_stack_bottom;
     p->boot_stack_size = (uintptr_t)&kernel_stack_top - (uintptr_t)&kernel_stack_bottom;
-
     //initialise kernel_as on the BSP
     kernel_as_init();
 
@@ -248,7 +246,6 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("[error] Failed to adopt thread on BSP");
         return;
     }
-
     //set current thread to rsp0
     set_tss_rsp0_currthrd();
 
@@ -269,6 +266,12 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("All MADT APs are online\n");
     }
 
+    //enable syscalls
+    syscall_init();
+
+    //enable SMEP and SMAP
+    enable_smep_smap();
+
     //Start LAPIC timer on BSP
     if (!lapic_timer_start(LAPIC_TICK_HZ)) {
         print("[error] BSP timer start failed\n");
@@ -278,5 +281,8 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
     //execute sti
     __asm__ volatile("sti" ::: "memory");
 
-    launch_user_test();
+    struct address_space *as=as_create();
+    struct thread *t = thread_create("sys_test", (thread_fn)run_sys_test, 0);
+    t->as=as;
+    schedule();
 }

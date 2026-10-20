@@ -1089,3 +1089,69 @@ The return takes the fast path (sysretq) only if the saved RIP is canonical and 
 returns through iretq, so a handler that rewrites the frame, such as a future exec, still works. A sysretq with a 
 non canonical RCX would fault in ring 0. Interrupts stay off from the cli to the sysretq, and the user RSP is loaded 
 just before swapgs
+
+# SMEP and SMAP and sys_read and sys_write
+
+## SMEP and SMAP
+
+to ensure kernel doesn't overwrite user memory but first I need copy_to and copy_from to access and write to that
+memory so that the kernel is modding user memory only through that.
+
+I will however to copy_to_user and copy_from_user for read and write syscalls and a cleaner API. Also adding a page
+fault handler and an exception table check.
+
+stac and clac are used to disable and reenable SMAP. I also need to enable SMEP and SMEP with bits 20 and 21 in CR4.
+
+Ugh it is fucking double faulting 0x08 for some reason. I'll do smep n smap one by one to find which is fucking with me.
+kernel code, data, and kernel stacks are mapped with the User/Supervisor (U/S, bit 2) bit set to 1 in the page tables
+FUCK. That or this fucking QEMU with the flags doesn't support smep and smap. they are both hanging.
+I'll make it check leaf 7 for CPUID support. Yep that confirms it the CPU doesn't support it in qemu.
+they both worked. first it said kvm needed then i said gfy and added +smep and +smap. It was the qemu command.
+
+SMEP and SMAP are enabled.
+
+## read and write syscalls
+
+now, sys_read and sys_write. for now sys_write only supports fd 1 and 2 for stderr and stdout. More can be added later.
+Similarly sys_read for now only takes fd 0 for stdin
+
+rdi = fd/arg1, rsi = buf/arg2, rdx = count/arg3
+
+these definitions are important:
+
+#define SYS_YIELD 24
+#define SYS_EXIT 60
+#define SYS_DEBUG_NUM 500
+#define SYS_READ      0
+#define SYS_WRITE     1
+#define SYS_EXIT      60
+
+if not these (or the syscalls defined later) there will be ENOSYS.
+sys_read and sys_write are using copy_to_user and copy_from_user.
+
+huh my syscall test failed. double fault with a null pointer dereference. gdb says No line number information available
+for address 0xffffffff80009963 <syscall_entry+3>. which means offset 3 from the entry point of syscall_entry.
+mov qword ptr gs:[PERCPU_OFF_USER_RSP], rsp right after swapgs is the red handed rat bastard.
+GS segment base register is 0 (NULL) on that CPU core hence the fucking null dereference.
+
+Ugh I'm the rat I made percpu_attach explicitly writing 0 into IA32_KERNEL_GS_BASE_MSR. I'm now making it write the
+uint64_t form of the percpu struct pointer.
+
+Buggy again. null pointer but from my kernel trying to read a page that doesn't exist.
+__asm__ volatile ("movq %%gs:0, %0" : "=r"(p));
+in percpu_self, traced with addr2line. damn it's because of gs:0.
+
+ohhh shit percpu_attach is called in ap_start_all but syscall init is before but the final test is at the very end. the
+IA32_KERNEL_GS_BASE is uninitialised.
+
+assembly expects TSS_RSP0 to be at byte offset 132 but it isn't. ugh it was a skill isue i was tacking fields onto
+per cpu like there was no tomorrow.
+
+k so i traced it to percpu_gdt_setup. Made percpu_attach write the gs base msr to the pointer. Final bug in the test
+itself where it was protection, it was in ring 3. Oh fuck me it's because the test was defined as static in my .h
+file so when it compiles it's in the kernel part and counts as ring 0.
+The code needs to be run by a thread with CS = 0x23 that is, user mode. So the code must be placed in user memory.
+this is however proof of SMEP working.
+
+i have to copy its memory into the address space. what memory? the fucking test code itself. Ah isn't that what an elf
+loader does?

@@ -2,6 +2,7 @@
 #include "../include/idt.h"
 #include "../include/display.h"
 #include "../include/thread.h"
+#include "../include/usercpy.h"
  
 #define KERNEL_CODE_SELECTOR 0x08
 #define GATE_INTERRUPT 0x8E
@@ -78,8 +79,8 @@ static void exception_handler(struct interrupt_frame *frame){
     print_hex(frame->rsp);
     print(" RFLAGS=0x");
     print_hex(frame->rflags);
- 
-     if (frame->vector == 14) {
+
+    if (frame->vector == 14) {
         uint64_t cr2;
         __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
         int is_present = (frame->error & 1) != 0;
@@ -91,6 +92,12 @@ static void exception_handler(struct interrupt_frame *frame){
         print(is_write ? " [write]" : " [read]");
         print(is_user ? " [user]\n" : " [supervisor]\n");
         if (!is_user) {
+            uint64_t fixup = search_exception_tables(frame->rip);
+            if (fixup) {
+                frame->rip = fixup;
+                return;
+            }
+
             panic("Kernel page fault");
         } else {
             if (cr2 < 0x1000 || cr2 >= 0x0000800000000000ULL) {

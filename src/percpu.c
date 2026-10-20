@@ -63,7 +63,7 @@ int percpu_attach(uint32_t apic_id) {
     if (p == 0)
         return 0;
     percpu_wrmsr(IA32_GS_BASE_MSR, (uint64_t)(uintptr_t)p);
-    percpu_wrmsr(IA32_KERNEL_GS_BASE_MSR, 0);
+    percpu_wrmsr(IA32_KERNEL_GS_BASE_MSR, (uint64_t)(uintptr_t)p);
     return 1;
 }
 
