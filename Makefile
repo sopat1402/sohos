@@ -48,7 +48,7 @@ OBJECTS = \
 
 DEPFILES = $(OBJECTS:.o=.d)
 
-.PHONY: all kernel iso run debug clean
+.PHONY: all kernel iso run debug clean gdb
 
 # Keep the existing default behavior: build the bootable ISO.
 all: iso
@@ -69,10 +69,14 @@ $(BUILD_DIR)/%.o: src/%.S | $(BUILD_DIR)
 $(BUILD_DIR):
 	mkdir -p $@
 
-$(ISO): $(KERNEL) $(GRUBCFG)
+$(BUILD_DIR)/initrd.tar: $(USER_BINS) | $(BUILD_DIR)
+	tar --format=ustar -cf $@ -C rootfs .
+
+$(ISO): $(KERNEL) $(GRUBCFG) $(BUILD_DIR)/initrd.tar
 	grub-file --is-x86-multiboot2 $(KERNEL)
 	mkdir -p iso/boot
 	cp $(KERNEL) iso/boot/kernel
+	cp $(BUILD_DIR)/initrd.tar iso/boot/initrd.tar
 	grub-mkrescue -o $@ iso/
 
 run: $(ISO)
@@ -87,7 +91,19 @@ gdb: $(KERNEL)
 		-ex 'target remote :1234'
 
 clean:
-	rm -rf $(BUILD_DIR)
-	rm -f iso/boot/kernel
+	rm -rf $(BUILD_DIR) rootfs
+	rm -f iso/boot/kernel iso/boot/initrd.tar
+
+USER_CFLAGS = -O2 -ffreestanding -fno-pie -fno-stack-protector -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns -mgeneral-regs-only
+USER_SRCS := $(wildcard user/*.c)
+USER_BINS := $(patsubst user/%.c,rootfs/bin/%,$(USER_SRCS))
+
+rootfs/bin/%: user/%.c user/ulib.h
+	mkdir -p rootfs/bin build/user
+	gcc $(USER_CFLAGS) -c $< -o build/user/$*.o
+	ld -static -nostdlib -z max-page-size=4096 -z separate-code -Ttext-segment=0x400000 -e _start -o $@ build/user/$*.o
+
+build/initrd.tar: $(USER_BINS)
+	tar --format=ustar -cf $@ -C rootfs .
 
 -include $(DEPFILES)

@@ -1304,3 +1304,8 @@ causing trouble too.
 OH MY FUCKING GOD IT RUNS I TYPED HELLO AND IT PRINTED HELLO I'M FUCKING TEARY EYED. I typed hello and it wrote it back
 to me. My child of 14 days just spoke to me.
 Even caps lock works. Shift works too for punctuation.
+
+# Initrd
+
+K now I have to add a tar archive of the programs I want into multiboot as a param. Mostly just sample programs
+in user/ and then makefile and grub.cfg changed. make run compiles automatically and makes the tar.
