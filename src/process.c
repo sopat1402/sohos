@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include "../include/address_space.h"
 #include "../include/virtual_manager.h"
+#include "../include/wait_queue.h"
 #include "../include/sched.h"
 #include "../include/kmalloc.h"
 #include "../include/thread.h"
@@ -12,25 +13,54 @@
 #define USER_STACK_TOP   0x00007FFFFFFFF000ULL
 #define USER_STACK_PAGES 4ULL
 #define USER_PAGE_SIZE   4096ULL
-
 #define USER_CS     0x23ULL
 #define USER_SS     0x1BULL
 #define USER_RFLAGS 0x202ULL
 
+static uint32_t next_pid=1;
+static spinlock_t proc_lock=SPINLOCK_INIT;
+#define MAX_PROCESSES 1024
+
 struct user_launch {
-    struct address_space *as;
+    struct process *proc;
     uint64_t entry;
     uint64_t stack_top;
 };
+
+static struct process **proc_table = NULL;
+static size_t process_table_capacity = 0;
+
+int add_to_table(struct process *proc) {
+    if (proc_table == NULL) {
+        process_table_capacity = 64;
+        proc_table = (struct process **)kmalloc(process_table_capacity * sizeof(struct process *));
+        if (proc_table == NULL)
+            return 0;
+        for (size_t i = 0; i < process_table_capacity; i++) {
+            proc_table[i] = NULL;
+        }
+    }
+    while (proc->pid >= process_table_capacity) {
+        size_t new_cap = process_table_capacity * 2;
+        struct process **new_table = (struct process **)krealloc(proc_table, new_cap * sizeof(struct process *));
+        if (new_table == NULL)
+            return 0;
+        for (size_t i = process_table_capacity; i < new_cap; i++) {
+            new_table[i] = NULL;
+        }
+        proc_table = new_table;
+        process_table_capacity = new_cap;
+    }
+    proc_table[proc->pid] = proc;
+    return 1;
+}
 
 static int map_user_stack(struct address_space *as) {
     for (uint64_t i = 0; i < USER_STACK_PAGES; i++) {
         uint64_t vaddr = USER_STACK_TOP - (i + 1) * USER_PAGE_SIZE;
         uint64_t phys = 0;
-
         if (vm_map(as->pml4_phys, vaddr, VM_READ | VM_WRITE | VM_USER, &phys) != VM_MAP_OK || phys == 0)
             return -1;
-
         __builtin_memset(phys_to_virt(phys), 0, USER_PAGE_SIZE);
     }
 
@@ -74,33 +104,171 @@ static void user_trampoline(void *arg) {
     kfree(arg);
     __asm__ volatile ("cli" ::: "memory");
     struct thread *t = thread_current();
-    t->as = launch.as;
-    as_switch(launch.as);
+    t->proc=launch.proc;
+    as_switch(launch.proc->as);
     jump_to_user(launch.entry, launch.stack_top);
 }
 
-struct thread *process_create(const char *name, const void *elf_data, uint64_t elf_size) {
+struct process *process_create(const char *name, const void *elf_data, uint64_t elf_size) {
     struct address_space *as = as_create();
+    struct process *parent = current_process();
     if (as == NULL)
         return NULL;
+    struct process *self=kzalloc(sizeof(struct process));
+    if (self==NULL){
+        as_destroy(as);
+        return NULL;
+    }
+
+    struct user_launch *launch = (struct user_launch *)kmalloc(sizeof(*launch));
+    if (launch == NULL) {
+        as_destroy(as);
+        kfree(self);
+        return NULL;
+    }
+
+    struct thread *t = thread_create(name, user_trampoline, launch);
+    if (t == NULL) {
+        kfree(launch);
+        as_destroy(as);
+        kfree(self);
+        return NULL;
+    }
+
     uint64_t entry = 0;
     if (elf_load(elf_data, elf_size, as, &entry) != 0 || map_user_stack(as) != 0) {
         as_destroy(as);
         return NULL;
     }
-    struct user_launch *launch = (struct user_launch *)kmalloc(sizeof(*launch));
-    if (launch == NULL) {
-        as_destroy(as);
-        return NULL;
-    }
-    launch->as = as;
+
+    uint64_t lock_flags=spin_lock_irqsave(&proc_lock);
+    launch->proc=self;
+    launch->proc->as = as;
     launch->entry = entry;
     launch->stack_top = USER_STACK_TOP;
-    struct thread *t = thread_create(name, user_trampoline, launch);
-    if (t == NULL) {
-        kfree(launch);
+    t->proc=self;
+    t->as=as;
+    self->state=PROCESS_RUNNING;
+    self->main_thread=t;
+    self->as=as;
+    self->pid=next_pid;
+    self->parent = parent;
+
+    if (parent != NULL) {
+        self->sibling = parent->children;
+        parent->children = self;
+    } else {
+        self->sibling = NULL;
+    }
+
+    next_pid++;
+    wait_queue_init(&self->child_wq);
+
+    if (!add_to_table(self)){
+        if (parent != NULL) {
+            if (parent->children == self) {
+                parent->children = self->sibling;
+            } else {
+                struct process *curr = parent->children;
+                while (curr != NULL && curr->sibling != self) {
+                    curr = curr->sibling;
+                }
+                if (curr != NULL) {
+                    curr->sibling = self->sibling;
+                }
+            }
+        }
+        spin_unlock_irqrestore(&proc_lock, lock_flags);
+        kfree(self);
         as_destroy(as);
+        kfree(launch);
         return NULL;
     }
-    return t;
+
+    spin_unlock_irqrestore(&proc_lock, lock_flags);
+    return self;
+}
+
+struct process *process_get_by_pid(uint32_t pid) {
+    uint64_t lock_flags = spin_lock_irqsave(&proc_lock);
+    if (pid >= process_table_capacity || proc_table == NULL) {
+        spin_unlock_irqrestore(&proc_lock, lock_flags);
+        return NULL;
+    }
+    struct process *proc = proc_table[pid];
+    spin_unlock_irqrestore(&proc_lock, lock_flags);
+    return proc;
+}
+
+struct process *current_process(void){
+    struct thread *curr_thread=thread_current();
+    return curr_thread->proc;
+}
+
+void sys_exit(int code) {
+    struct process *proc = current_process();
+    if (!proc) {
+        thread_exit();
+        return;
+    }
+    uint64_t lock_flags = spin_lock_irqsave(&proc_lock);
+    proc->exit_code = code;
+    proc->state = PROCESS_ZOMBIE;
+    struct process *child = proc->children;
+    while (child != NULL) {
+        child->parent = NULL;
+        child = child->sibling;
+    }
+    proc->children = NULL;
+    if (proc->parent) {
+        wait_queue_wake_one(&proc->parent->child_wq);
+    }
+    spin_unlock_irqrestore(&proc_lock, lock_flags);
+    thread_exit();
+}
+
+int32_t process_wait(int32_t pid, int *status_out) {
+    struct process *self = current_process();
+    if (!self) {
+        return -1;
+    }
+    uint64_t lock_flags = spin_lock_irqsave(&proc_lock);
+    while (1) {
+        struct process *curr = self->children;
+        struct process *prev = NULL;
+        int found_child_exists = 0;
+        while (curr != NULL) {
+            if (pid == -1 || curr->pid == (uint32_t)pid) {
+                found_child_exists = 1;
+                if (curr->state == PROCESS_ZOMBIE) {
+                    int32_t reaped_pid = (int32_t)curr->pid;
+                    if (status_out != NULL) {
+                        *status_out = curr->exit_code;
+                    }
+                    if (prev == NULL) {
+                        self->children = curr->sibling;
+                    } else {
+                        prev->sibling = curr->sibling;
+                    }
+                    if (reaped_pid >= 0 && (size_t)reaped_pid < process_table_capacity) {
+                        proc_table[reaped_pid] = NULL;
+                    }
+                    spin_unlock_irqrestore(&proc_lock, lock_flags);
+                    kfree(curr);
+                    return reaped_pid;
+                }
+            }
+            prev = curr;
+            curr = curr->sibling;
+        }
+        if (!found_child_exists) {
+            spin_unlock_irqrestore(&proc_lock, lock_flags);
+            return -1;
+        }
+        struct wait_queue_entry wq_entry;
+        wait_queue_prepare_to_wait(&self->child_wq, &wq_entry, &lock_flags);
+        spin_unlock_irqrestore(&proc_lock, lock_flags);
+        schedule();
+        lock_flags = spin_lock_irqsave(&proc_lock);
+    }
 }

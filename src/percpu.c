@@ -4,6 +4,10 @@
 #include "../include/phys.h"
 #include "../include/buddy.h"
 
+#define NMI_IST_ORDER 1u
+#define NMI_IST_SLOT  1
+#define NMI_IST_GATE  2
+
 static struct percpu *cpus;
 static uint32_t cpu_total;
 
@@ -98,3 +102,4 @@ void cpu_fix_cr0(void) {
     cr0 |= CR0_WP;
     __asm__ volatile ("mov %0, %%cr0" :: "r"(cr0) : "memory");
 }
+

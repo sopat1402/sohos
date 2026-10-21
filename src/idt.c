@@ -171,6 +171,7 @@ void idt_init(void){
     uint64_t stub = (uint64_t)(uintptr_t)irq_stub_base;
     for (uint32_t i = IRQ_VECTOR_FIRST; i < IDT_VECTORS; i++)
         idt_set_gate((int)i, stub + (uint64_t)(i - IRQ_VECTOR_FIRST) * IRQ_STUB_SIZE, 0, GATE_INTERRUPT);
+    idt_set_gate(2, isr_stub_table[2], 2, GATE_INTERRUPT);
     idt_ptr.limit = sizeof(idt) - 1;
     idt_ptr.base = (uint64_t)(uintptr_t)idt;
     idt_load();

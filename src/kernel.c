@@ -19,7 +19,6 @@
 #include "../include/syscall.h"
 #include "../include/usercpy.h"
 #include "../include/tlb.h"
-#include "../tests/leak_test.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -276,6 +275,5 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
     //execute sti
     __asm__ volatile("sti" ::: "memory");
 
-    thread_create("leaktest", leak_test_thread, NULL);
     sched_idle_loop();
 }

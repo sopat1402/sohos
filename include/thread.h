@@ -2,7 +2,7 @@
 #define THREAD_H
 
 #include <stdint.h>
-#include "address_space.h"
+#include "process.h"
 
 #define THREAD_STACK_ORDER 3u
 #define THREAD_NAME_LEN 16u
@@ -33,6 +33,7 @@ struct thread {
     int32_t exit_code;
     uint8_t wake_pending;
     struct address_space *as;
+    struct process *proc;
     char name[THREAD_NAME_LEN];
 };
 

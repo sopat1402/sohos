@@ -45,5 +45,6 @@ static inline struct percpu *percpu_self(void) {
     return p;
 }
 void cpu_fix_cr0(void);
+int setup_nmi_ist(struct percpu *p);
 
 #endif

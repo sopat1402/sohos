@@ -24,9 +24,7 @@ static void leak_run_one(void) {
 
 static void leak_test_thread(void *arg) {
     (void)arg;
-
     leak_run_one();
-
     uint64_t before = buddy_available_pages();
 
     for (uint32_t i = 0; i < LEAK_RUNS; i++)

@@ -1210,3 +1210,32 @@ NMI needs its own IST stack
 Ok so I made it pass a leak test. It spawns like 300 process that just exit. Also now after checking vector 14, I check
 if it is a user proc and kill the thread if it is instead of kernel halt. TLB shootdown is now gone from vm_map.
 also percpu_wrmsr(ia32_kernel_gs_base_msr,0) is needed. added.
+
+# Process lifetimes
+
+Process struct with the state, exit code, pid. process_create already is there in a basic form. I'm moving address
+space out of struct thread and into struct process. thread will point to process
+nvm the proc is only in thread so that it can point to its process, process doesn't need to come in there in 
+sched because that works with threads.
+
+I probably need a process table. I'm using static next_pid and can't use the pointer because if pid is the pointer,
+get_pid will leak the kernel memory address and pointers can be reused and the damn allocator then has to consider
+pointer reuse. I need an XArray tree. That'll come later. for now it'll be an array. fixed size. don't like it? oh i'm
+sorry what process lookup table does YOUR custom OS use?
+
+For now it is fixed size. It can be growable later. LOL wtf no I made krealloc just for this. Made a current process
+using current thread and also accession for the dynamic array. it has an adding function. Now there needs to be a
+syscall exit done properly. currently SYS_EXIT only calls thread_exit.
+
+I have to make the processes a linked list using siblings with parent as vertical linked list. on sys exit the process
+unlinks itself from siblings and wakes the parent's child wq. it also removes itself from the process table. Sys exit
+then marks the process as a zombie and sets its exit code and then it doesn't destroy the address space. there is
+instead going to be a cleanup function so that processes can check their state.
+
+Instead of appending to children I will prepend hence O(1). Parent is to put itself in its wait queue that is, its
+thread else a) the sys exit will fail and it'll hang because it calls wait for its process to run.
+
+SYS_WAIT is 61; bad fucking idea making exit unlink the exiting process. wait should do that. parent's job to manage
+its children and bury them. dying kids don't bury themselves. ECHILD is -1.
+
+pid is passed in rdi and status_out in rsi. the zombie pid it returned in the interrupt frame's rax.

@@ -2,10 +2,10 @@
 #include <stddef.h>
 #include "../include/syscall.h"
 #include "../include/idt.h"
-#include "../include/thread.h"
 #include "../include/sched.h"
 #include "../include/display.h"
 #include "../include/usercpy.h"
+#include "../include/process.h"
 
 #define SC_MSR_EFER 0xC0000080u
 #define SC_MSR_STAR 0xC0000081u
@@ -84,8 +84,11 @@ static int64_t sys_read(int fd, void *buf, size_t count) {
 void syscall_dispatch(struct interrupt_frame *f) {
 	switch (f->rax) {
 	case SYS_EXIT:
-		thread_exit();
+		sys_exit((int)f->rdi);
 		break;
+	case SYS_WAIT:
+	    f->rax = (uint64_t)process_wait((int32_t)f->rdi, (int *)f->rsi);
+	    break;
 	case SYS_YIELD:
 		schedule();
 		f->rax = 0;

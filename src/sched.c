@@ -125,6 +125,7 @@ int sched_adopt_boot_thread(void) {
     rq->idle = t;
     p->current_thread = t;
     t->as = &kernel_as;
+    t->proc=NULL;
     p->curr_as = &kernel_as;
     __atomic_fetch_or(&kernel_as.cpu_mask, 1ull << p->cpu_id, __ATOMIC_SEQ_CST);
     __atomic_store_n(&rq->online, 1, __ATOMIC_RELEASE);
