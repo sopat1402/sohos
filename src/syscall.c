@@ -6,6 +6,7 @@
 #include "../include/display.h"
 #include "../include/usercpy.h"
 #include "../include/process.h"
+#include "../include/ps2.h"
 
 #define SC_MSR_EFER 0xC0000080u
 #define SC_MSR_STAR 0xC0000081u
@@ -13,6 +14,7 @@
 #define SC_MSR_FMASK 0xC0000084u
 #define SC_EFER_SCE 1ull
 #define SC_FMASK 0x47700ull
+#define EBADF 9
 
 extern void syscall_entry(void);
 
@@ -65,20 +67,12 @@ static int64_t sys_write(int fd, const void *buf, size_t count) {
 	return (int64_t)total_written;
 }
 
-static int64_t sys_read(int fd, void *buf, size_t count) {
-	if (fd != 0) {
-		return -1;
+long sys_read(int fd, char *buf, unsigned long count) {
+	if (fd!=0){
+		return -EBADF;
 	}
-	char kernel_data[] = "empty bro\n";
-	size_t len = sizeof(kernel_data);
-	if (count < len) len = count;
-	unsigned long uncopied = copy_to_user(buf, kernel_data, len);
-	size_t copied = len - uncopied;
-
-	if (copied == 0 && len > 0) {
-		return -1;
-	}
-	return (int64_t)copied;
+	unsigned long read=kbd_read(count,buf);
+	return read;
 }
 
 void syscall_dispatch(struct interrupt_frame *f) {

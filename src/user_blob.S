@@ -1,5 +1,5 @@
     .global user_exit_start
     .global user_exit_end
 user_exit_start:
-    .incbin "exit.elf"
+    .incbin "kbd.elf"
 user_exit_end:

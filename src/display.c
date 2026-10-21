@@ -140,3 +140,12 @@ void kprintf(const char *fmt, ...) {
 
     va_end(args);
 }
+
+void display_clear(void) {
+    volatile uint8_t *vga = vga_base();
+    for (int i = 0; i < 80 * 25; i++) {
+        vga[i * 2] = ' ';
+        vga[i * 2 + 1] = 0x07;
+    }
+    cursor = 0;
+}

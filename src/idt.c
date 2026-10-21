@@ -3,6 +3,7 @@
 #include "../include/display.h"
 #include "../include/thread.h"
 #include "../include/usercpy.h"
+#include "../include/ps2.h"
  
 #define KERNEL_CODE_SELECTOR 0x08
 #define GATE_INTERRUPT 0x8E
@@ -127,6 +128,11 @@ static void exception_handler(struct interrupt_frame *frame) {
 void interrupt_dispatch(struct interrupt_frame *frame);
  
 void interrupt_dispatch(struct interrupt_frame *frame){
+    if (frame->vector==33){
+        uint8_t scancode=inb(0x60);
+        kbd_buffer_push(scancode);
+        outb(0x20,0x20);
+    }
     if (frame->vector < IRQ_VECTOR_FIRST) {
         exception_handler(frame);
         return;

@@ -19,6 +19,8 @@
 #include "../include/syscall.h"
 #include "../include/usercpy.h"
 #include "../include/tlb.h"
+#include "../include/ps2.h"
+#include "../tests/kbd_test.c"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -274,6 +276,11 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
     //execute sti
     __asm__ volatile("sti" ::: "memory");
+
+    //initialise the keyboard
+    kbd_init();
+    display_clear();
+    kbd_test_thread(NULL);
 
     sched_idle_loop();
 }

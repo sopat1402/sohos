@@ -1252,3 +1252,55 @@ from user space.
 I had much of the groundwork done. I just had to do stac and clac and copy a \0 terminated string into kernel memory
 and then give the start and end to my process_create.
 it then returns the process pid in rax.
+
+# Keyboard handler
+
+Time for a real PS/2 keyboard IRQ handler with a ring buffer and echo, backspace and buffering.
+read must block on a wait queue till input arrives.
+
+Need to read port 0x60 and interrupt is on vector 33. It just needs to push the scan code into a ringbuffer.
+
+using inb and outb in assembly to read and write to the port.
+ok. so for vector 33 i need to now just do uint8_t scancode=inb(0x60) and push the thing to a global ring buffer in my ps2.c where i defined inb and outb. but must account for end of interrupt (EOI).
+Must send EOI to the PIC and the end of my interrupt handler else the PIC will lock up. I just need to send EOI to the
+master PIC like outb(0x20,0x20).
+
+Ring buffer solves the issue of the user process only calling read() to get inputs but the keyboard keeps sending stuff.
+For efficient bitmasking I'll put it at 256 bytes.
+
+Wrote a new sys_read to pop from the head of the buffer till it doesn't return 0 and call hlt while it is reading too.
+wired into the idt already. kbd buffer pops from head and writes to tail. basic fifo semantics smh and so many ppl do
+it differently. we should have something like IUPAC but for coding semantics.
+
+But sys_read is incomplete rn. It is only reading one char and that too a scancode, not ascii.
+
+so I got rid of the current sys_read. I need line buffered reading (canonical mode). Must then also translate scancodes
+o ascii. scancode lookup will be via array. used designated initialisers (yay C99).
+
+I forgot about shift and caps lock tee hee. made an upper map for uppercase and symbols. using a shift_pressed flag.
+the read is spinning on empty buffer rn but it needs to be put to sleep if the scancode read gives -1
+
+😭 this literally has be pressing backspace with 'a' to find out what happens so that I can program it. Must add spin
+lock that disables interrupts. async btw read and isr so need a lock. 0x1C for enter make will fall through and add \n
+this is expected. Not checking the upper map for caps. just subbing 32 from read_char if it is between 97 and 122.
+scancode & 0x80 ensures that there isn't out of bounds access but check if after the stuff for shift and stuff because
+they are above 128.
+
+Make a keyboard wait queue and an fn to init the kbd to be called from kernel.c.
+
+returning -EBADF on fd!=0 in read for now.
+
+ah I have to initialise the PIC? hehe. i may have forgotten to do it. my kbd init was just wait queue init. it blocked 
+waiting for input but I forgot the fucking PIC. The test that is. I hoped to bother with the PIC stuff later but fine
+the master slave stuff is done. io_wait is just to make the cpu wait for an io cycle by writing junk to an unused port.
+
+Put my frame vector check in the wrong place. for now i put it at the start of interrupt dispatch before it checks the
+vector range. Also forgot to make kbd_buffer_pop take the lock again after waking.
+
+My thing was bitching out on me for a good reason : smap was doing its job. now using copy_to_user. excellent. this
+driver is in ring 0 and the pointer buf is passed from ring 3. Also i was marking the thread blocked and that was
+causing trouble too.
+
+OH MY FUCKING GOD IT RUNS I TYPED HELLO AND IT PRINTED HELLO I'M FUCKING TEARY EYED. I typed hello and it wrote it back
+to me. My child of 14 days just spoke to me.
+Even caps lock works. Shift works too for punctuation.
