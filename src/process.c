@@ -9,6 +9,7 @@
 #include "../include/phys.h"
 #include "../include/elf_loader.h"
 #include "../include/process.h"
+#include "../include/kstring.h"
 
 #define USER_STACK_TOP   0x00007FFFFFFFF000ULL
 #define USER_STACK_PAGES 4ULL
@@ -16,6 +17,9 @@
 #define USER_CS     0x23ULL
 #define USER_SS     0x1BULL
 #define USER_RFLAGS 0x202ULL
+
+extern uint8_t user_exit_start[];
+extern uint8_t user_exit_end[];
 
 static uint32_t next_pid=1;
 static spinlock_t proc_lock=SPINLOCK_INIT;
@@ -271,4 +275,24 @@ int32_t process_wait(int32_t pid, int *status_out) {
         schedule();
         lock_flags = spin_lock_irqsave(&proc_lock);
     }
+}
+
+int32_t sys_spawn(const char *user_path) {
+    char path_buf[64];
+    if (strncpy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) {
+        return -1;
+    }
+    const void *elf_data = NULL;
+    uint64_t elf_size = 0;
+    if (kstrcmp(path_buf, "exit.elf") == 0) {
+        elf_data = user_exit_start;
+        elf_size = (uint64_t)(user_exit_end - user_exit_start);
+    } else {
+        return -1;
+    }
+    struct process *child = process_create(path_buf, elf_data, elf_size);
+    if (child == NULL) {
+        return -1;
+    }
+    return (int32_t)child->pid;
 }

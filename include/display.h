@@ -4,15 +4,11 @@
 #include <stdint.h>
 
 void putchar(char c);
-
 void print(const char *str);
-
 void print_hex(uint64_t value);
-
 void print_uint(uint64_t value);
-
 void print_size(uint64_t value);
-
 void display_set_cursor(uint16_t row, uint16_t col);
+void kprintf(const char *fmt, ...);
 
 #endif

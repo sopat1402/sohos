@@ -1,5 +1,7 @@
 #include <stdint.h>
 #include "../include/phys.h"
+#include <stdarg.h>
+#include <stddef.h>
 
 static uint16_t cursor = 0;
 
@@ -81,4 +83,60 @@ void print_size(uint64_t value) {
 
 void display_set_cursor(uint16_t row, uint16_t col){
     cursor = row * 80 + col;
+}
+
+void kprintf(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+
+    while (*fmt != '\0') {
+        if (*fmt == '%') {
+            fmt++;
+            switch (*fmt) {
+                case 's': {
+                    const char *s = va_arg(args, const char *);
+                    if (s != NULL) {
+                        print(s);
+                    } else {
+                        print("(null)");
+                    }
+                    break;
+                }
+                case 'd':
+                case 'u': {
+                    uint64_t val = va_arg(args, uint64_t);
+                    print_uint(val);
+                    break;
+                }
+                case 'x':
+                case 'p': {
+                    uint64_t val = va_arg(args, uint64_t);
+                    print_hex(val);
+                    break;
+                }
+                case 'c': {
+                    char c = (char)va_arg(args, int);
+                    putchar(c);
+                    break;
+                }
+                case '%': {
+                    putchar('%');
+                    break;
+                }
+                case '\0': {
+                    return;
+                }
+                default: {
+                    putchar('%');
+                    putchar(*fmt);
+                    break;
+                }
+            }
+        } else {
+            putchar(*fmt);
+        }
+        fmt++;
+    }
+
+    va_end(args);
 }

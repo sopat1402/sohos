@@ -1239,3 +1239,16 @@ SYS_WAIT is 61; bad fucking idea making exit unlink the exiting process. wait sh
 its children and bury them. dying kids don't bury themselves. ECHILD is -1.
 
 pid is passed in rdi and status_out in rsi. the zombie pid it returned in the interrupt frame's rax.
+
+# Spawn
+
+I don't want a damn COW table on my todo list when I don't even have a driver for a keyboard. Spawn will be used.
+fork and exec can come later.
+
+Need to pass a path somehow. For now I have a .incbin in user_blob.S hence it is embedded.
+Before that I finally added a fucking kprintf. I'm sick of print and print_uint and print_hex. I need a string copy
+from user space.
+
+I had much of the groundwork done. I just had to do stac and clac and copy a \0 terminated string into kernel memory
+and then give the start and end to my process_create.
+it then returns the process pid in rax.

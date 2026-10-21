@@ -18,7 +18,7 @@ uint64_t search_exception_tables(uint64_t fault_rip) {
 	return 0;
 }
 
-static inline int access_ok(const void *addr, size_t size) {
+inline int access_ok(const void *addr, size_t size) {
 	uint64_t start = (uint64_t)addr;
 	uint64_t end = start + size;
 	if (end < start || end > USER_ADDR_MAX) {

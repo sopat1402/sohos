@@ -89,6 +89,11 @@ void syscall_dispatch(struct interrupt_frame *f) {
 	case SYS_WAIT:
 	    f->rax = (uint64_t)process_wait((int32_t)f->rdi, (int *)f->rsi);
 	    break;
+	case SYS_SPAWN: {
+	    const char *user_path = (const char *)f->rdi;
+	    f->rax = (uint64_t)sys_spawn(user_path);
+	    break;
+	}
 	case SYS_YIELD:
 		schedule();
 		f->rax = 0;

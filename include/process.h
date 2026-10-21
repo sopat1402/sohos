@@ -28,5 +28,6 @@ int32_t process_wait(int32_t pid, int *status_out);
 struct process *current_process(void);
 struct process *process_get_by_pid(uint32_t pid);
 int32_t process_wait(int32_t pid, int *status_out);
+int32_t sys_spawn(const char *user_path);
 
 #endif
