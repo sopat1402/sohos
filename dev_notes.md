@@ -1305,7 +1305,15 @@ OH MY FUCKING GOD IT RUNS I TYPED HELLO AND IT PRINTED HELLO I'M FUCKING TEARY E
 to me. My child of 14 days just spoke to me.
 Even caps lock works. Shift works too for punctuation.
 
-# Initrd
+# Initrd and userspace shell
 
 K now I have to add a tar archive of the programs I want into multiboot as a param. Mostly just sample programs
 in user/ and then makefile and grub.cfg changed. make run compiles automatically and makes the tar.
+
+I then have to parse the tar and fuck have to alloc space for the elf modules. process_create has a race so I made
+thread get made at the end. sys spawn does path lookup now. Tested it with calc.c
+
+I figure eh why not, I'm adding a userspace shell to exec commands. It'll be a cool interface now that I have path
+lookup and make testing much easier. Later I'll have VFS and a filesystem so doing mkfs will be super satisfying.
+
+Added a SYS_CLEAR call that calls display_clear()

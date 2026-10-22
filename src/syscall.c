@@ -75,14 +75,24 @@ long sys_read(int fd, char *buf, unsigned long count) {
 	return read;
 }
 
+int32_t sys_wait(int32_t pid, int *status_user) {
+    int status = 0;
+    int32_t r = process_wait(pid, &status);
+
+    if (r >= 0 && status_user != NULL && copy_to_user(status_user, &status, sizeof(status)) != 0)
+        return -14;
+
+    return r;
+}
+
 void syscall_dispatch(struct interrupt_frame *f) {
 	switch (f->rax) {
 	case SYS_EXIT:
 		sys_exit((int)f->rdi);
 		break;
 	case SYS_WAIT:
-	    f->rax = (uint64_t)process_wait((int32_t)f->rdi, (int *)f->rsi);
-	    break;
+		f->rax = (uint64_t)(int64_t)sys_wait((int32_t)f->rdi, (int *)f->rsi);
+		break;
 	case SYS_SPAWN: {
 	    const char *user_path = (const char *)f->rdi;
 	    f->rax = (uint64_t)sys_spawn(user_path);
@@ -92,6 +102,10 @@ void syscall_dispatch(struct interrupt_frame *f) {
 		schedule();
 		f->rax = 0;
 		break;
+	case SYS_CLEAR:
+	    display_clear();
+	    f->rax = 0;
+	    break;
 	case SYS_DEBUG_NUM:
 		print("[SYSCALL] ");
 		print_uint(f->rdi);

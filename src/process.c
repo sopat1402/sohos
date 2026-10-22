@@ -10,6 +10,7 @@
 #include "../include/elf_loader.h"
 #include "../include/process.h"
 #include "../include/kstring.h"
+#include "../include/initrd.h"
 
 #define USER_STACK_TOP   0x00007FFFFFFFF000ULL
 #define USER_STACK_PAGES 4ULL
@@ -106,90 +107,103 @@ static __attribute__((noreturn)) void jump_to_user(uint64_t entry, uint64_t stac
 static void user_trampoline(void *arg) {
     struct user_launch launch = *(struct user_launch *)arg;
     kfree(arg);
+
     __asm__ volatile ("cli" ::: "memory");
+
     struct thread *t = thread_current();
-    t->proc=launch.proc;
+    t->proc = launch.proc;
+    t->as = launch.proc->as;
+    launch.proc->main_thread = t;
     as_switch(launch.proc->as);
+
     jump_to_user(launch.entry, launch.stack_top);
 }
 
+static void child_list_unlink(struct process *parent, struct process *child) {
+    struct process **link = &parent->children;
+
+    while (*link != NULL) {
+        if (*link == child) {
+            *link = child->sibling;
+            child->sibling = NULL;
+            return;
+        }
+        link = &(*link)->sibling;
+    }
+}
+
 struct process *process_create(const char *name, const void *elf_data, uint64_t elf_size) {
-    struct address_space *as = as_create();
     struct process *parent = current_process();
+    struct address_space *as = as_create();
+
     if (as == NULL)
         return NULL;
-    struct process *self=kzalloc(sizeof(struct process));
-    if (self==NULL){
-        as_destroy(as);
-        return NULL;
-    }
-
-    struct user_launch *launch = (struct user_launch *)kmalloc(sizeof(*launch));
-    if (launch == NULL) {
-        as_destroy(as);
-        kfree(self);
-        return NULL;
-    }
-
-    struct thread *t = thread_create(name, user_trampoline, launch);
-    if (t == NULL) {
-        kfree(launch);
-        as_destroy(as);
-        kfree(self);
-        return NULL;
-    }
 
     uint64_t entry = 0;
+
     if (elf_load(elf_data, elf_size, as, &entry) != 0 || map_user_stack(as) != 0) {
         as_destroy(as);
         return NULL;
     }
 
-    uint64_t lock_flags=spin_lock_irqsave(&proc_lock);
-    launch->proc=self;
+    struct process *self = (struct process *)kzalloc(sizeof(struct process));
+    struct user_launch *launch = (struct user_launch *)kmalloc(sizeof(*launch));
+
+    if (self == NULL || launch == NULL) {
+        if (self != NULL)
+            kfree(self);
+        if (launch != NULL)
+            kfree(launch);
+        as_destroy(as);
+        return NULL;
+    }
+
+    self->state = PROCESS_RUNNING;
+    self->as = as;
+    self->parent = parent;
+    wait_queue_init(&self->child_wq);
+
+    launch->proc = self;
     launch->proc->as = as;
     launch->entry = entry;
     launch->stack_top = USER_STACK_TOP;
-    t->proc=self;
-    t->as=as;
-    self->state=PROCESS_RUNNING;
-    self->main_thread=t;
-    self->as=as;
-    self->pid=next_pid;
-    self->parent = parent;
+
+    uint64_t lock_flags = spin_lock_irqsave(&proc_lock);
+    self->pid = next_pid;
+
+    if (!add_to_table(self)) {
+        spin_unlock_irqrestore(&proc_lock, lock_flags);
+        kfree(self);
+        kfree(launch);
+        as_destroy(as);
+        return NULL;
+    }
+
+    next_pid++;
 
     if (parent != NULL) {
         self->sibling = parent->children;
         parent->children = self;
-    } else {
-        self->sibling = NULL;
-    }
-
-    next_pid++;
-    wait_queue_init(&self->child_wq);
-
-    if (!add_to_table(self)){
-        if (parent != NULL) {
-            if (parent->children == self) {
-                parent->children = self->sibling;
-            } else {
-                struct process *curr = parent->children;
-                while (curr != NULL && curr->sibling != self) {
-                    curr = curr->sibling;
-                }
-                if (curr != NULL) {
-                    curr->sibling = self->sibling;
-                }
-            }
-        }
-        spin_unlock_irqrestore(&proc_lock, lock_flags);
-        kfree(self);
-        as_destroy(as);
-        kfree(launch);
-        return NULL;
     }
 
     spin_unlock_irqrestore(&proc_lock, lock_flags);
+
+    struct thread *t = thread_create(name, user_trampoline, launch);
+
+    if (t == NULL) {
+        lock_flags = spin_lock_irqsave(&proc_lock);
+        proc_table[self->pid] = NULL;
+
+        if (parent != NULL)
+            child_list_unlink(parent, self);
+
+        spin_unlock_irqrestore(&proc_lock, lock_flags);
+        kfree(self);
+        kfree(launch);
+        as_destroy(as);
+        return NULL;
+    }
+
     return self;
 }
 
@@ -278,21 +292,14 @@ int32_t process_wait(int32_t pid, int *status_out) {
 }
 
 int32_t sys_spawn(const char *user_path) {
-    char path_buf[64];
-    if (strncpy_from_user(path_buf, user_path, sizeof(path_buf)) < 0) {
+    char path_buf[128];
+    if (strncpy_from_user(path_buf, user_path, sizeof(path_buf)) < 0)
         return -1;
-    }
-    const void *elf_data = NULL;
-    uint64_t elf_size = 0;
-    if (kstrcmp(path_buf, "exit.elf") == 0) {
-        elf_data = user_exit_start;
-        elf_size = (uint64_t)(user_exit_end - user_exit_start);
-    } else {
+    const struct initrd_file *file = initrd_lookup(path_buf);
+    if (file == NULL)
         return -1;
-    }
-    struct process *child = process_create(path_buf, elf_data, elf_size);
-    if (child == NULL) {
+    struct process *child = process_create(path_buf, file->data, file->size);
+    if (child == NULL)
         return -1;
-    }
     return (int32_t)child->pid;
 }

@@ -30,7 +30,7 @@ static void zero_frame(uint64_t phys){
         words[i]=0;
 }
 
-struct mem_region bitmap_space(uint64_t num_bytes, uint64_t kstart, uint64_t kend, uint64_t info_start, uint64_t info_end){
+struct mem_region bitmap_space(uint64_t num_bytes, uint64_t kstart, uint64_t kend, uint64_t info_start, uint64_t info_end, uint64_t mod_start, uint64_t mod_end){
     struct mem_region none={0,0};
     num_bytes=align_up(num_bytes,FRAME_SIZE);
 
@@ -38,6 +38,8 @@ struct mem_region bitmap_space(uint64_t num_bytes, uint64_t kstart, uint64_t ken
     uint64_t k_end=align_up(kend,FRAME_SIZE);
     uint64_t i_start=align_down(info_start,FRAME_SIZE);
     uint64_t i_end=align_up(info_end,FRAME_SIZE);
+    uint64_t m_start=align_down(mod_start,FRAME_SIZE);
+    uint64_t m_end=align_up(mod_end,FRAME_SIZE);
 
     for (uint32_t r=0;r<memory_region_count();r++){
         const struct mem_region *region=memory_region_get(r);
@@ -51,6 +53,10 @@ struct mem_region bitmap_space(uint64_t num_bytes, uint64_t kstart, uint64_t ken
             }
             if (ranges_overlap(candidate,candidate+num_bytes,i_start,i_end)){
                 candidate=i_end;
+                moved=1;
+            }
+            if (m_end>m_start && ranges_overlap(candidate,candidate+num_bytes,m_start,m_end)){
+                candidate=m_end;
                 moved=1;
             }
         } while (moved);
@@ -89,7 +95,7 @@ void bitmap_init(uint64_t base_phys, uint64_t bytes){
         bitmap[i]=0xFF;
 }
 
-void mark_free_memory(uint64_t kstart, uint64_t kend, uint64_t info_start, uint64_t info_end){
+void mark_free_memory(uint64_t kstart, uint64_t kend, uint64_t info_start, uint64_t info_end, uint64_t mod_start, uint64_t mod_end){
     if (bitmap_size==0)
         return;
 
@@ -104,6 +110,9 @@ void mark_free_memory(uint64_t kstart, uint64_t kend, uint64_t info_start, uint6
     reserve_range(bitmap,nframes,kstart,kend);
     reserve_range(bitmap,nframes,bitmap_phys,bitmap_phys+bitmap_size);
     reserve_range(bitmap,nframes,info_start,info_end);
+
+    if (mod_end>mod_start)
+        reserve_range(bitmap,nframes,mod_start,mod_end);
 }
 
 uint64_t bitmap_frame_count(void){

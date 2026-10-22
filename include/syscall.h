@@ -12,6 +12,8 @@ struct interrupt_frame;
 #define SYS_EXIT	60
 #define SYS_WAIT	61
 #define SYS_SPAWN	3
+#define SYS_CLEAR	700
+#define SYS_GETPID	39
 
 void syscall_init(void);
 void syscall_dispatch(struct interrupt_frame *f);

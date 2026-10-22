@@ -20,7 +20,8 @@
 #include "../include/usercpy.h"
 #include "../include/tlb.h"
 #include "../include/ps2.h"
-#include "../tests/kbd_test.c"
+#include "../include/mb2_module.h"
+#include "../include/initrd.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -69,9 +70,7 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         &boot_rsdp_revision
     );
     if (rsdp_status == 1) {
-        print("ACPI RSDP revision: ");
-        print_uint(boot_rsdp_revision);
-        print("\n");
+        kprintf("ACPI RSDP revision: %d\n",boot_rsdp_revision);
     } else if (rsdp_status == 0) {
         print("No ACPI RSDP tag in Multiboot info\n");
     } else {
@@ -104,9 +103,7 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         ap_plan_ready = (ap_status == 1);
 
         if (ap_plan_ready) {
-            print("Prepared APs: ");
-            print_uint(ap_plan.ap_count);
-            print("\n");
+            kprintf("Prepared APs: %d\n",ap_plan.ap_count);
         } else {
             print("MADT has no secondary APs to start\n");
         }
@@ -114,6 +111,16 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("AP startup unavailable: missing ACPI or APIC support\n");
     }
 
+    //init of initrd
+    uint64_t initrd_start = 0;
+    uint64_t initrd_end = 0;
+    int initrd_status = mb2_find_module(phys_to_virt(multiboot_data), (uint32_t)(BOOTSTRAP_LIMIT - multiboot_data), &initrd_start, &initrd_end);
+    if (initrd_status < 0) {
+        print("[error] Malformed Multiboot module tag\n");
+        return;
+    }
+
+    //define physical start regions of the image
     uint64_t image_phys_start = (uint64_t)(uintptr_t)&__image_phys_start;
     uint64_t image_phys_end   = (uint64_t)(uintptr_t)&__kernel_phys_end;
 
@@ -167,7 +174,7 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
     uint64_t info_start = multiboot_data;
     uint64_t info_end = multiboot_data + multiboot_info_size;
 
-    struct mem_region bitmap_region = bitmap_space(bitmap_bytes, image_phys_start, image_phys_end, info_start, info_end);
+    struct mem_region bitmap_region = bitmap_space(bitmap_bytes, image_phys_start, image_phys_end, info_start, info_end,initrd_start,initrd_end);
 
     if (bitmap_region.end <= bitmap_region.base || bitmap_region.end > BOOTSTRAP_LIMIT) {
         print("[error] Bitmap is outside the bootstrap map or invalid\n");
@@ -176,7 +183,7 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
     //initial bitmap for making a new tree and stack
     bitmap_init(bitmap_region.base, bitmap_region.end - bitmap_region.base);
-    mark_free_memory(image_phys_start, image_phys_end, info_start, info_end);
+    mark_free_memory(image_phys_start, image_phys_end, info_start, info_end,initrd_start,initrd_end);
 
     //make new tree and new stack
     uint64_t lapic_map_phys = ap_plan_ready ? ap_plan.lapic_phys : (bsp_cpu.has_apic ? bsp_cpu.lapic_phys_base : 0);
@@ -198,6 +205,14 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
     if (!kmalloc_init()) {
         print("[error] kmalloc initialization failed\n");
         return;
+    }
+
+    //init of initrd
+    if (initrd_status == 1) {
+        int files = initrd_init(initrd_start, initrd_end);
+        print("initrd files: ");
+        print_uint(files < 0 ? 0 : (uint64_t)files);
+        print("\n");
     }
 
     //set up lapic and timer
@@ -279,8 +294,12 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
     //initialise the keyboard
     kbd_init();
-    display_clear();
-    kbd_test_thread(NULL);
 
+    //launch shell
+    const struct initrd_file *init_file = initrd_lookup("/bin/sh");
+    if (init_file != NULL)
+        process_create("sh", init_file->data, init_file->size);
+
+    //sched loop
     sched_idle_loop();
 }
