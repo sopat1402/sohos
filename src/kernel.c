@@ -22,6 +22,7 @@
 #include "../include/ps2.h"
 #include "../include/mb2_module.h"
 #include "../include/initrd.h"
+#include "../include/pci.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -206,6 +207,9 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         print("[error] kmalloc initialization failed\n");
         return;
     }
+
+    pci_init();
+    pci_dump();
 
     //init of initrd
     if (initrd_status == 1) {

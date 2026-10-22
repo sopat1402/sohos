@@ -80,11 +80,11 @@ $(ISO): $(KERNEL) $(GRUBCFG) $(BUILD_DIR)/initrd.tar
 	grub-mkrescue -o $@ iso/
 
 run: $(ISO)
-	$(QEMU) -cpu qemu64,+smep,+smap -m 4G -smp 4 -cdrom $(ISO) -no-reboot -no-shutdown
+	$(QEMU) -cpu qemu64,+smep,+smap -m 4G -smp 4 -cdrom $(ISO) -no-reboot -no-shutdown -drive file=disk.img,if=none,id=d0,format=raw -device virtio-blk-pci,drive=d0,disable-legacy=on
 
 debug: $(ISO)
 	$(QEMU) -cpu qemu64,+smep,+smap -m 4G -smp 4 -cdrom $(ISO) -no-reboot -no-shutdown \
-		-s -d int,cpu_reset -D $(BUILD_DIR)/qemu.log
+		-s -d int,cpu_reset -D $(BUILD_DIR)/qemu.log -drive file=disk.img,if=none,id=d0,format=raw -device virtio-blk-pci,drive=d0,disable-legacy=on
 
 gdb: $(KERNEL)
 	gdb $(KERNEL) \

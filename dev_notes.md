@@ -1317,3 +1317,19 @@ I figure eh why not, I'm adding a userspace shell to exec commands. It'll be a c
 lookup and make testing much easier. Later I'll have VFS and a filesystem so doing mkfs will be super satisfying.
 
 Added a SYS_CLEAR call that calls display_clear()
+
+# PCI enumeration
+
+PCI enumeration over the legacy configuration mechanism (ports 0xCF8 and 0xCFC), which QEMU's default machine 
+provides. All port access goes through hw_read32 and hw_write32, and every config read and write takes one spinlock, 
+because the address and data ports are a two-step sequence that two cores must not mix. pci_init scans bus 0, treats a 
+function with the multifunction bit set as eight functions, and follows PCI-to-PCI bridges (class 06, subclass 04) to 
+their secondary bus using the number the firmware assigned. Each present function is recorded with its ids, class codes,
+interrupt line and pin, and its decoded BARs. BAR sizing disables I/O and memory decoding in the command register while
+it works, writes all ones to each BAR, reads back the mask, restores the original value, and restores the command 
+register afterwards. It handles I/O BARs, 32-bit memory BARs and 64-bit memory BARs, which use two slots. pci_next_cap 
+walks the capability list, starting at the head when after_offset is 0 and after a given capability otherwise, so a 
+driver can visit every vendor capability (virtio uses several with id 0x09). pci_set_command ORs bits into the command 
+register: set PCI_CMD_MEMORY and PCI_CMD_BUS_MASTER before using a device's MMIO or DMA. Nothing here maps a BAR into 
+virtual memory: a BAR is a physical address outside RAM, so the page-table layer needs a way to map an arbitrary 
+physical range uncached before a driver can touch it.
