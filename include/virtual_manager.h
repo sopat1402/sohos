@@ -58,7 +58,7 @@ enum vm_walk_status vm_translate(uint64_t root_phys, uintptr_t virt_addr,uint64_
 enum vm_map_status vm_map(uint64_t root_phys, uintptr_t virt_addr,uint64_t flags, uint64_t *out_phys);
 
 enum vm_unmap_status vm_unmap(uint64_t root_phys, uintptr_t virt_addr,uint64_t *out_phys);
-
+enum vm_map_status vm_map_phys(uint64_t root_phys, uintptr_t virt_addr, uint64_t phys, uint64_t flags, uint64_t pte_extra, uint64_t *out_phys);
 #ifdef __cplusplus
 }
 #endif

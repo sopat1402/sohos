@@ -425,3 +425,76 @@ int vfree(uintptr_t base) {
     free_region_garbage(garbage);
     return 0;
 }
+
+uint64_t vmalloc_reserve(uint64_t size) {
+    if (size == 0 || (size & (PAGE_SIZE - 1)) != 0 || size > VMALLOC_END - VMALLOC_BASE)
+        return 0;
+    uint64_t addr = 0;
+    struct free_region *detached = NULL;
+    uint64_t irq_flags = spin_lock_irqsave(&mem_lock);
+    if (allocator.initialized && allocator.free_space >= size) {
+        struct free_region **link = &allocator.head;
+
+        while (*link != NULL) {
+            struct free_region *curr = *link;
+            uint64_t available = curr->end - curr->base;
+
+            if (available >= size) {
+                addr = curr->base;
+
+                if (available == size) {
+                    *link = curr->next;
+                    detached = curr;
+                    detached->next = NULL;
+                } else {
+                    curr->base += size;
+                }
+
+                allocator.free_space -= size;
+                break;
+            }
+
+            link = &curr->next;
+        }
+    }
+
+    spin_unlock_irqrestore(&mem_lock, irq_flags);
+
+    if (addr != 0 && detached != NULL && detached != &initial)
+        kfree(detached);
+
+    return addr;
+}
+
+int vmalloc_release(uint64_t addr, uint64_t size) {
+    if (addr == 0 || size == 0 || (addr & (PAGE_SIZE - 1)) != 0 || (size & (PAGE_SIZE - 1)) != 0)
+        return -1;
+
+    struct free_region *record = kmalloc(sizeof(*record));
+
+    if (record == NULL)
+        return -1;
+
+    record->base = addr;
+    record->end = addr + size;
+    record->next = NULL;
+    record->error = VMALLOC_ERR_NONE;
+    record->error_addr = 0;
+    record->error_phys = 0;
+
+    int rc = 0;
+    struct free_region *garbage = NULL;
+    uint64_t irq_flags = spin_lock_irqsave(&mem_lock);
+
+    if (insert_free_region_locked(record, &garbage) == 0) {
+        allocator.free_space += size;
+    } else {
+        quarantine_locked(record, VMALLOC_ERR_FREE_LIST_OVERLAP, addr, 0);
+        rc = -1;
+    }
+
+    spin_unlock_irqrestore(&mem_lock, irq_flags);
+
+    free_region_garbage(garbage);
+    return rc;
+}

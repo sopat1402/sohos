@@ -1333,3 +1333,24 @@ driver can visit every vendor capability (virtio uses several with id 0x09). pci
 register: set PCI_CMD_MEMORY and PCI_CMD_BUS_MASTER before using a device's MMIO or DMA. Nothing here maps a BAR into 
 virtual memory: a BAR is a physical address outside RAM, so the page-table layer needs a way to map an arbitrary 
 physical range uncached before a driver can touch it.
+
+# virtio-blk driver
+
+currently haven't mapped the regions outside physical ram mmio stuff. need to map it as writeable, uncached and non
+executable (for W^X). I need a vm_map_phys, dma map and then comes the ioremap and unmap stuff.
+
+UGH i HATE this for some reason i'm getting an early return in map_phys. ioremap isn't working. FUCK ME i put the test
+for it before vmalloc init lmfao. Moved all of it to after vmalloc init.
+
+now it works. 4 queues because qemu uses one queue per vcpu and I have 4 cores being passed. status f. 0xF means it is
+all there and driver is ok too.
+
+Now I can do virtio. The driver is straightforward but for some reason I'm getting exception 3 breakpoint when doing
+write 0 and flush 0 to the pre set 1.
+
+After the first completed request, the device may raise a legacy PCI interrupt (INTx). I poll and never acknowledge it,
+and an interrupt arriving through the PIC or IOAPIC path could land in the IDT as an unexpected vector
+
+yep that was it. I disabled the interrupts for that and will deal with them later. btw this is with queues and modern
+virtio 1.x ; so polling rn interrupts will come later. Nothing handles INTx rn. doing blocks next as polling is fast
+enough for now.

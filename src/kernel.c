@@ -23,6 +23,8 @@
 #include "../include/mb2_module.h"
 #include "../include/initrd.h"
 #include "../include/pci.h"
+#include "../include/pci.h"
+#include "../include/virtio_blk.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -208,9 +210,6 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
         return;
     }
 
-    pci_init();
-    pci_dump();
-
     //init of initrd
     if (initrd_status == 1) {
         int files = initrd_init(initrd_start, initrd_end);
@@ -272,6 +271,18 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
 
     //initialise vmalloc
     vmalloc_init();
+
+    //virtio blk init and pci init and enumeration
+    pci_init();
+    pci_dump();
+    virtio_blk_init();
+    uint8_t *b = kmalloc(512);
+    int r = virtio_blk_read(0, b, 1);
+    print("read0 ");
+    print_uint((uint64_t)(r < 0 ? -r : r));
+    print("\n");
+    print("after read\n");
+    virtio_blk_test();
 
     //Start APs
     if (ap_plan_ready) {

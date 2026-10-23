@@ -578,3 +578,267 @@ done:
     tlb_shootdown();
     return status;
 }
+
+#ifndef PTE_PWT
+#define PTE_PWT (1ULL << 3)
+#endif
+
+#ifndef PTE_PCD
+#define PTE_PCD (1ULL << 4)
+#endif
+
+static void vm_map_free_tables_only(uint64_t *tables, uint8_t count) {
+    for (uint8_t i = 0; i < count; i++)
+        (void)buddy_free_order(tables[i], 0);
+}
+
+enum vm_map_status vm_map_phys(uint64_t root_phys, uintptr_t virt_addr, uint64_t phys, uint64_t flags, uint64_t pte_extra, uint64_t *out_phys) {
+    uint64_t lock_flags, existing_phys = 0, existing_flags = 0;
+    uint64_t data_phys = 0, new_tables[3] = {0};
+    uint64_t e4 = 0, e3 = 0, e2 = 0;
+    uint64_t *pml4 = NULL, *pdpt = NULL, *pd = NULL, *pt = NULL;
+    uint64_t leaf_entry, table_entry_flags;
+    enum vm_walk_status walk;
+    enum vm_map_status failure;
+    uint8_t table_count, allocated_tables = 0, needed_now;
+    uint64_t i4 = (virt_addr >> 39) & 0x1FF;
+    uint64_t i3 = (virt_addr >> 30) & 0x1FF;
+    uint64_t i2 = (virt_addr >> 21) & 0x1FF;
+    uint64_t i1 = (virt_addr >> 12) & 0x1FF;
+
+    if (!out_phys)
+        return VM_MAP_BAD_ARGUMENT;
+
+    *out_phys = 0;
+
+    if (!root_phys || (root_phys & ~PTE_ADDR_MASK))
+        return VM_MAP_BAD_ROOT;
+
+    if ((phys & 0xFFFULL) || (phys & ~PTE_ADDR_MASK))
+        return VM_MAP_BAD_ARGUMENT;
+
+    if (!canonical_addr(virt_addr))
+        return VM_MAP_NONCANONICAL;
+
+    if (virt_addr & 0xFFFULL)
+        return VM_MAP_BAD_ARGUMENT;
+
+    if (!(flags & VM_READ) || (flags & ~(VM_READ | VM_WRITE | VM_USER | VM_EXEC)))
+        return VM_MAP_BAD_FLAGS;
+
+    if ((flags & VM_WRITE) && (flags & VM_EXEC))
+        return VM_MAP_BAD_FLAGS;
+
+    lock_flags = spin_lock_irqsave(&map_lock);
+    walk = vm_translate_unlocked(root_phys, virt_addr, &existing_phys, &existing_flags);
+
+    if (walk == VM_WALK_OK) {
+        *out_phys = existing_phys;
+        spin_unlock_irqrestore(&map_lock, lock_flags);
+        return VM_MAP_ALREADY_MAPPED;
+    }
+
+    table_count = vm_map_tables_needed(walk);
+
+    if (table_count == UINT8_MAX) {
+        failure = vm_map_walk_error(walk);
+        spin_unlock_irqrestore(&map_lock, lock_flags);
+        return failure;
+    }
+
+    spin_unlock_irqrestore(&map_lock, lock_flags);
+
+    data_phys = phys;
+
+    for (uint8_t i = 0; i < table_count; i++) {
+        new_tables[i] = buddy_alloc_order(0);
+
+        if (!new_tables[i]) {
+            vm_map_free_tables_only(new_tables, allocated_tables);
+            return VM_MAP_NO_MEMORY;
+        }
+
+        allocated_tables++;
+    }
+
+    lock_flags = spin_lock_irqsave(&map_lock);
+    walk = vm_translate_unlocked(root_phys, virt_addr, &existing_phys, &existing_flags);
+
+    if (walk == VM_WALK_OK) {
+        *out_phys = existing_phys;
+        spin_unlock_irqrestore(&map_lock, lock_flags);
+        vm_map_free_tables_only(new_tables, allocated_tables);
+        return VM_MAP_ALREADY_MAPPED;
+    }
+
+    needed_now = vm_map_tables_needed(walk);
+
+    if (needed_now == UINT8_MAX) {
+        failure = vm_map_walk_error(walk);
+        goto fail_locked;
+    }
+
+    if (needed_now > allocated_tables) {
+        failure = VM_MAP_RETRY;
+        goto fail_locked;
+    }
+
+    pml4 = (uint64_t *)phys_to_virt(root_phys);
+
+    if (!pml4) {
+        failure = VM_MAP_BAD_TABLE;
+        goto fail_locked;
+    }
+
+    if (walk != VM_WALK_NOT_PRESENT_PML4) {
+        e4 = __atomic_load_n(&pml4[i4], __ATOMIC_ACQUIRE);
+
+        if (!(e4 & PTE_PRESENT) || (e4 & PTE_PS)) {
+            failure = VM_MAP_INVALID_ENTRY;
+            goto fail_locked;
+        }
+
+        if (!vm_entry_allows(e4, flags)) {
+            failure = VM_MAP_PERMISSION_CONFLICT;
+            goto fail_locked;
+        }
+
+        pdpt = (uint64_t *)phys_to_virt(e4 & PTE_ADDR_MASK);
+
+        if (!pdpt) {
+            failure = VM_MAP_BAD_TABLE;
+            goto fail_locked;
+        }
+    }
+
+    if (walk == VM_WALK_NOT_PRESENT_PD ||
+        walk == VM_WALK_NOT_PRESENT_PT) {
+        e3 = __atomic_load_n(&pdpt[i3], __ATOMIC_ACQUIRE);
+
+        if (!(e3 & PTE_PRESENT) || (e3 & PTE_PS)) {
+            failure = VM_MAP_INVALID_ENTRY;
+            goto fail_locked;
+        }
+
+        if (!vm_entry_allows(e3, flags)) {
+            failure = VM_MAP_PERMISSION_CONFLICT;
+            goto fail_locked;
+        }
+
+        pd = (uint64_t *)phys_to_virt(e3 & PTE_ADDR_MASK);
+
+        if (!pd) {
+            failure = VM_MAP_BAD_TABLE;
+            goto fail_locked;
+        }
+    }
+
+    if (walk == VM_WALK_NOT_PRESENT_PT) {
+        e2 = __atomic_load_n(&pd[i2], __ATOMIC_ACQUIRE);
+
+        if (!(e2 & PTE_PRESENT) || (e2 & PTE_PS)) {
+            failure = VM_MAP_INVALID_ENTRY;
+            goto fail_locked;
+        }
+
+        if (!vm_entry_allows(e2, flags)) {
+            failure = VM_MAP_PERMISSION_CONFLICT;
+            goto fail_locked;
+        }
+
+        pt = (uint64_t *)phys_to_virt(e2 & PTE_ADDR_MASK);
+
+        if (!pt) {
+            failure = VM_MAP_BAD_TABLE;
+            goto fail_locked;
+        }
+    }
+
+    switch (walk) {
+        case VM_WALK_NOT_PRESENT_PML4:
+            pdpt = (uint64_t *)phys_to_virt(new_tables[0]);
+            pd = (uint64_t *)phys_to_virt(new_tables[1]);
+            pt = (uint64_t *)phys_to_virt(new_tables[2]);
+            break;
+
+        case VM_WALK_NOT_PRESENT_PDPT:
+            pd = (uint64_t *)phys_to_virt(new_tables[0]);
+            pt = (uint64_t *)phys_to_virt(new_tables[1]);
+            break;
+
+        case VM_WALK_NOT_PRESENT_PD:
+            pt = (uint64_t *)phys_to_virt(new_tables[0]);
+            break;
+
+        case VM_WALK_NOT_PRESENT_PT:
+            break;
+
+        default:
+            failure = VM_MAP_INVALID_ENTRY;
+            goto fail_locked;
+    }
+
+    if (!pdpt || !pd || !pt) {
+        failure = VM_MAP_BAD_TABLE;
+        goto fail_locked;
+    }
+
+    table_entry_flags = PTE_PRESENT | PTE_WRITABLE;
+    if (flags & VM_USER) {
+        table_entry_flags |= PTE_USER;
+    }
+
+    leaf_entry = (data_phys & PTE_ADDR_MASK) | PTE_PRESENT;
+    if (flags & VM_WRITE)
+        leaf_entry |= PTE_WRITABLE;
+
+    if (flags & VM_USER)
+        leaf_entry |= PTE_USER;
+
+    if (!(flags & VM_EXEC))
+        leaf_entry |= PTE_NX;
+
+    leaf_entry |= pte_extra;
+
+    switch (walk) {
+        case VM_WALK_NOT_PRESENT_PML4:
+            __atomic_store_n(&pt[i1], leaf_entry, __ATOMIC_RELAXED);
+            pd[i2] = new_tables[2] | table_entry_flags;
+            pdpt[i3] = new_tables[1] | table_entry_flags;
+            __atomic_store_n(&pml4[i4], new_tables[0] | table_entry_flags, __ATOMIC_RELEASE);
+            break;
+
+        case VM_WALK_NOT_PRESENT_PDPT:
+            __atomic_store_n(&pt[i1], leaf_entry, __ATOMIC_RELAXED);
+            pd[i2] = new_tables[1] | table_entry_flags;
+            __atomic_store_n(&pdpt[i3], new_tables[0] | table_entry_flags, __ATOMIC_RELEASE);
+            break;
+
+        case VM_WALK_NOT_PRESENT_PD:
+            __atomic_store_n(&pt[i1], leaf_entry, __ATOMIC_RELAXED);
+            __atomic_store_n(&pd[i2], new_tables[0] | table_entry_flags, __ATOMIC_RELEASE);
+            break;
+
+        case VM_WALK_NOT_PRESENT_PT:
+            __atomic_store_n(&pt[i1], leaf_entry, __ATOMIC_RELEASE);
+            break;
+
+        default:
+            failure = VM_MAP_INVALID_ENTRY;
+            goto fail_locked;
+    }
+
+    *out_phys = data_phys;
+
+
+    spin_unlock_irqrestore(&map_lock, lock_flags);
+    for (uint8_t i = needed_now; i < allocated_tables; i++)
+        (void)buddy_free_order(new_tables[i], 0);
+
+    return VM_MAP_OK;
+
+fail_locked:
+    spin_unlock_irqrestore(&map_lock, lock_flags);
+    vm_map_free_tables_only(new_tables, allocated_tables);
+    return failure;
+}
