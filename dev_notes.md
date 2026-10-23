@@ -1354,3 +1354,23 @@ and an interrupt arriving through the PIC or IOAPIC path could land in the IDT a
 yep that was it. I disabled the interrupts for that and will deal with them later. btw this is with queues and modern
 virtio 1.x ; so polling rn interrupts will come later. Nothing handles INTx rn. doing blocks next as polling is fast
 enough for now.
+
+# Block layer
+
+struct block_device: it holds the name, sector size and count, an ops table (read, write, optional flush) and a private
+    pointer.
+Registry: block_register, block_find, block_count and block_get on a small fixed registry. Duplicates and incomplete 
+    devices are rejected.
+Entry points: block_read, block_write and block_flush check the buffer, count and LBA range (overflow-safe) before 
+    calling the driver. Filesystems and the cache should call only these.
+block_register_virtio(): wraps the virtio driver as vda
+
+4 KiB blocks, 256 block capacity in the block cache. will be using my filesystem project. as of 24th october 2026, 
+ol' betsy can't handle multiple threads safely and has no journalling. want to multithread? its philosophy as of now is
+you and whose mutex? thankfully that is something I can make the rust filesystem handle. issue is, i have a 14 byte
+header there as it is an experimental filesystem with a 14 byte header for aries metadata when i add it. Why do I need
+to port that piece of crap here. I wouldn't let my magnum opus (for now) go near that little shit I know where the
+bodies are buried.
+
+fuck it licenses will fuck me. i added kernel hooks to my block.c and must now edit my filesystem code to support
+nostd in the rust compile.
