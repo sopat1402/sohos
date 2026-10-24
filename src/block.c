@@ -5,6 +5,7 @@
 #include "../include/kmalloc.h"
 #include "../include/virtio_blk.h"
 #include "../include/block.h"
+#include "../include/mutex.h"
 
 static struct block_device *registry[BLOCK_MAX_DEVICES];
 static uint32_t registry_count;
@@ -195,29 +196,42 @@ void block_test(void) {
 #define FS_BLOCK_SECTORS 8u
 
 static struct block_device *fs_dev;
+static mutex_t fs_mutex;
+
+int fs_glue_init(void) {
+    mutex_init(&fs_mutex);
+    fs_dev = block_find("vda");
+    return fs_dev == NULL ? -1 : 0;
+}
+
+void kernel_fs_lock(void) {
+    mutex_lock(&fs_mutex);
+}
+
+void kernel_fs_unlock(void) {
+    mutex_unlock(&fs_mutex);
+}
+
+static int args_ok(uint64_t block, uint32_t count) {
+    return fs_dev != NULL && count != 0 && count <= UINT32_MAX / FS_BLOCK_SECTORS && block <= UINT64_MAX / FS_BLOCK_SECTORS;
+}
 
 int kernel_block_read(uint64_t block, void *buf, uint32_t count) {
-    if (fs_dev == NULL && (fs_dev = block_find("vda")) == NULL)
-        return -1;
-
-    if (count == 0 || count > UINT32_MAX / FS_BLOCK_SECTORS || block > UINT64_MAX / FS_BLOCK_SECTORS)
+    if (!args_ok(block, count))
         return -1;
 
     return block_read(fs_dev, block * FS_BLOCK_SECTORS, buf, count * FS_BLOCK_SECTORS);
 }
 
 int kernel_block_write(uint64_t block, const void *buf, uint32_t count) {
-    if (fs_dev == NULL && (fs_dev = block_find("vda")) == NULL)
-        return -1;
-
-    if (count == 0 || count > UINT32_MAX / FS_BLOCK_SECTORS || block > UINT64_MAX / FS_BLOCK_SECTORS)
+    if (!args_ok(block, count))
         return -1;
 
     return block_write(fs_dev, block * FS_BLOCK_SECTORS, buf, count * FS_BLOCK_SECTORS);
 }
 
 int kernel_block_flush(void) {
-    if (fs_dev == NULL && (fs_dev = block_find("vda")) == NULL)
+    if (fs_dev == NULL)
         return -1;
 
     return block_flush(fs_dev);

@@ -25,6 +25,8 @@
 #include "../include/pci.h"
 #include "../include/pci.h"
 #include "../include/virtio_blk.h"
+#include "../include/block.h"
+#include "../include/ext4_kernel.h"
 
 #define PAGE_SIZE 4096ull
 #define BOOTSTRAP_LIMIT 0x100000000ULL
@@ -276,13 +278,10 @@ void kmain(uint32_t magic, uint64_t multiboot_data) {
     pci_init();
     pci_dump();
     virtio_blk_init();
-    uint8_t *b = kmalloc(512);
-    int r = virtio_blk_read(0, b, 1);
-    print("read0 ");
-    print_uint((uint64_t)(r < 0 ? -r : r));
-    print("\n");
-    print("after read\n");
-    virtio_blk_test();
+    block_register_virtio();
+
+    //test ext4
+    ext4_test();
 
     //Start APs
     if (ap_plan_ready) {

@@ -30,7 +30,7 @@ struct block_device *block_get(uint32_t index);
 int block_read(struct block_device *dev, uint64_t lba, void *buf, uint32_t count);
 int block_write(struct block_device *dev, uint64_t lba, const void *buf, uint32_t count);
 int block_flush(struct block_device *dev);
-
+int fs_glue_init(void);
 int block_register_virtio(void);
 void block_test(void);
 

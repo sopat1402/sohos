@@ -50,7 +50,7 @@ SECTIONS
         *(.rodata .rodata.*)
         . = ALIGN(8);
         __start___ex_table = .;
-        KEEP(*(.ex_table))
+        KEEP(*(__ex_table .ex_table .ex_table.*))
         __stop___ex_table = .;
         __rodata_end = .;
     } :rodata

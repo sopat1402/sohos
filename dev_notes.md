@@ -1374,3 +1374,13 @@ bodies are buried.
 
 fuck it licenses will fuck me. i added kernel hooks to my block.c and must now edit my filesystem code to support
 nostd in the rust compile.
+
+The fs_glue_init is to provide hooks and a big mutex to be used initially in the filesystem because someone didn't add
+concurrency. still better than fat32 imo. I give up. I'm not using that rust piece of shit.
+
+Sorry past me but you wrote a piece of trash. ext4 it is. This is the disclaimer. I'm not adding a license at all so
+this cannot be copied hence no license violation (i hope).
+
+wrote a self contained ext4 driver because I was upset. Linker script already puts the table in .rodata, but it matches 
+the input section name .ex_table, while the objects use __ex_table. The pattern misses, so ld makes it an orphan. it's
+whack a mole with bugs at this point.

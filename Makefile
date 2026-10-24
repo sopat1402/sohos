@@ -71,7 +71,10 @@ $(BUILD_DIR):
 
 $(BUILD_DIR)/initrd.tar: $(USER_BINS) | $(BUILD_DIR)
 	tar --format=ustar -cf $@ -C rootfs .
-
+disk.img: $(USER_BINS)
+	rm -f $@
+	truncate -s 64M $@
+	mke2fs -q -t ext4 -b 4096 -d rootfs -L sohos $@
 $(ISO): $(KERNEL) $(GRUBCFG) $(BUILD_DIR)/initrd.tar
 	grub-file --is-x86-multiboot2 $(KERNEL)
 	mkdir -p iso/boot
@@ -102,8 +105,5 @@ rootfs/bin/%: user/%.c user/ulib.h
 	mkdir -p rootfs/bin build/user
 	gcc $(USER_CFLAGS) -c $< -o build/user/$*.o
 	ld -static -nostdlib -z max-page-size=4096 -z separate-code -Ttext-segment=0x400000 -e _start -o $@ build/user/$*.o
-
-build/initrd.tar: $(USER_BINS)
-	tar --format=ustar -cf $@ -C rootfs .
 
 -include $(DEPFILES)
